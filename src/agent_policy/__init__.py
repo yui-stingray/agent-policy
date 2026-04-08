@@ -1,7 +1,7 @@
 """Where: src/agent_policy/__init__.py
 What: agent-policy public API.
 Why: this is the entire surface that downstream code is allowed to import.
-     If a name is not re-exported here, it is private — see ARCHITECTURE.md.
+     If a name is not re-exported here, it is private.
 """
 
 from __future__ import annotations
@@ -23,4 +23,4 @@ __all__ = [
     "Reason",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

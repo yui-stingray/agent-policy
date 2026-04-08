@@ -26,8 +26,6 @@ HARD_GUARDRAILS: dict[str, str] = {
 # Capabilities that mutate repo state. The first-write guardrail must not
 # fire for non-mutating operations like `read` — reading an unfamiliar repo
 # is not itself a reason to stop for approval.
-#
-# Keep this list in sync with the 7-capability MVP taxonomy in ARCHITECTURE.md §2.
 _MUTATING_CAPABILITIES: frozenset[str] = frozenset(
     {"write", "commit", "push", "push.force", "merge.pr", "shell"}
 )
