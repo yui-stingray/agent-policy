@@ -33,6 +33,14 @@ Those belong in the wrapper layer that calls `evaluate`.
 pip install agent-policy  # once published to PyPI
 ```
 
+From a source checkout (until the PyPI release is live), install the
+package in editable mode so both the library and `examples/check.py` can
+resolve `import agent_policy`:
+
+```bash
+pip install -e .
+```
+
 Requires Python 3.11+ (uses stdlib `tomllib`). The only runtime dependency
 is `pydantic >= 2`.
 
@@ -155,7 +163,8 @@ A runnable minimal wrapper lives in [`examples/check.py`](examples/check.py).
 
 ## Examples
 
-See [`examples/`](examples/):
+See [`examples/`](examples/). Runnable after installing the package
+(`pip install agent-policy`, or `pip install -e .` from a source checkout):
 
 - `policy.toml` — a minimal fail-closed policy with two repos.
 - `check.py` — a tiny CLI wrapper that maps `PolicyDecision` to JSON on
