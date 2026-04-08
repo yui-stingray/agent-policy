@@ -170,6 +170,10 @@ See [`examples/`](examples/). Runnable after installing the package
 - `check.py` — a tiny CLI wrapper that maps `PolicyDecision` to JSON on
   stdout and a process exit code, suitable for PreToolUse hooks.
 
+## Releases
+
+Tag-driven. Pushing a `vX.Y.Z` annotated tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the sdist + wheel and publishes to PyPI via Trusted Publishing (OIDC). No maintainer-side credentials are required.
+
 ## License
 
 MIT.
