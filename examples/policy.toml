@@ -1,0 +1,46 @@
+# Where: examples/policy.toml
+# What: a minimal, fail-closed agent-policy policy used by examples/check.py.
+# Why: show the two things most real policies need — per-repo overrides and
+#      ownership-class gating — in the smallest possible file.
+#
+# Read alongside README.md "Policy file format". Every field here is
+# validated by pydantic with `extra="forbid"`, so typos fail loudly.
+
+# Fail-closed default. Anything not explicitly listed below is
+# require_approval — never auto_allow by omission.
+default_mode = "require_approval"
+
+# ---------------------------------------------------------------------------
+# Internal repo: broadly trusted, but shell still needs a human.
+# ---------------------------------------------------------------------------
+
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+read   = "auto_allow"
+write  = "auto_allow"
+commit = "auto_allow"
+push   = "auto_allow"
+
+# A second entry for the same repo tightens one capability. The evaluator
+# scans every matching entry in order, so this `shell = require_approval`
+# is NOT shadowed by the block above.
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+shell = "require_approval"
+
+# ---------------------------------------------------------------------------
+# External repo: read is fine, everything else stays at default (require_approval).
+# ---------------------------------------------------------------------------
+
+[[repo_policy]]
+repo = "someone-else/their-repo"
+ownership_class = "external"
+
+[repo_policy.capabilities]
+read = "auto_allow"
