@@ -9,7 +9,10 @@ Contract:
   shell commands — see README for the wrapper pattern.
 - Decision order:
     1. Hard guardrails (unconditional, then conditional).
-    2. First matching repo_policy entry, gated by optional ownership_class.
+    2. Scan all repo_policy entries matching (repo, ownership_class).
+       Return the first entry that declares the requested capability.
+       If none declare it, fall through to default_mode but remember the
+       repo matched so callers can see which entries were considered.
     3. default_mode fallback with reason="default_mode".
 """
 
@@ -41,6 +44,10 @@ def evaluate(
     if guardrail is not None:
         return guardrail
 
+    # Scan every entry for the same repo. A policy split across multiple
+    # [[repo_policy]] blocks must not lose later constraints just because
+    # an earlier block matched the repo but omitted the capability.
+    matched_repo_fallback: str | None = None
     for repo_policy in matrix.repo_policy:
         if repo_policy.repo != repo:
             continue
@@ -53,16 +60,15 @@ def evaluate(
                 reason="repo_policy",
                 matched_repo=repo_policy.repo,
             )
-        return PolicyDecision(
-            mode=matrix.default_mode,
-            reason="default_mode",
-            matched_repo=repo_policy.repo,
-        )
+        # Remember the first matching repo so the fallback decision still
+        # reports which repo was considered, even if no capability matched.
+        if matched_repo_fallback is None:
+            matched_repo_fallback = repo_policy.repo
 
     return PolicyDecision(
         mode=matrix.default_mode,
         reason="default_mode",
-        matched_repo=None,
+        matched_repo=matched_repo_fallback,
     )
 
 

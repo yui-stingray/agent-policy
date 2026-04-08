@@ -23,6 +23,16 @@ HARD_GUARDRAILS: dict[str, str] = {
 """Unconditional guardrails. Repo policies cannot override these."""
 
 
+# Capabilities that mutate repo state. The first-write guardrail must not
+# fire for non-mutating operations like `read` — reading an unfamiliar repo
+# is not itself a reason to stop for approval.
+#
+# Keep this list in sync with the 7-capability MVP taxonomy in ARCHITECTURE.md §2.
+_MUTATING_CAPABILITIES: frozenset[str] = frozenset(
+    {"write", "commit", "push", "push.force", "merge.pr", "shell"}
+)
+
+
 def _evaluate_hard_guardrails(
     repo: str,
     capability: str,
@@ -50,8 +60,13 @@ def _evaluate_hard_guardrails(
         )
 
     # First write by an external-ownership actor gets a human in the loop.
+    # Only applies to mutating capabilities — `read` is safe and must not
+    # be blocked just because it is the first interaction with an external
+    # repo. Context key name stays `first_write_to_repo` to make the
+    # intent obvious at call sites.
     if (
-        context.get("ownership_class") == "external"
+        capability in _MUTATING_CAPABILITIES
+        and context.get("ownership_class") == "external"
         and context.get("first_write_to_repo")
     ):
         return PolicyDecision(

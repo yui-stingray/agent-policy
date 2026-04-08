@@ -82,6 +82,25 @@ def test_external_first_write_requires_approval() -> None:
     assert decision.reason == "hard_guardrail"
 
 
+def test_external_first_write_does_not_block_read() -> None:
+    # Regression (P2): first_write_to_repo guardrail must not fire for
+    # non-mutating capabilities. Reading an unfamiliar external repo is
+    # not itself a sensitive action — it should fall through to the
+    # normal repo_policy / default_mode path.
+    policy = PolicyMatrix(default_mode="auto_allow")
+
+    decision = evaluate(
+        policy,
+        repo="someone-else/their-repo",
+        capability="read",
+        context={"ownership_class": "external", "first_write_to_repo": True},
+    )
+
+    assert decision.mode == "auto_allow"
+    assert decision.reason == "default_mode"
+    assert decision.matched_repo is None
+
+
 # ---------------------------------------------------------------------------
 # repo_policy matching
 # ---------------------------------------------------------------------------
@@ -152,6 +171,58 @@ def test_ownership_class_gates_repo_policy_match() -> None:
     assert decision.mode == "require_approval"
     assert decision.reason == "default_mode"
     assert decision.matched_repo is None
+
+
+def test_split_repo_policy_finds_capability_in_later_entry() -> None:
+    # Regression (P1): when the same repo is split across multiple
+    # [[repo_policy]] entries, scanning must continue past an earlier
+    # entry that matches the repo but omits the capability. Otherwise
+    # a late `shell = require_approval` constraint would be silently
+    # dropped by an earlier general-purpose block.
+    policy = PolicyMatrix(
+        default_mode="auto_allow",
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                capabilities={"read": "auto_allow", "commit": "auto_allow"},
+            ),
+            RepoPolicy(
+                repo="acme/app",
+                capabilities={"shell": "require_approval"},
+            ),
+        ],
+    )
+
+    decision = evaluate(policy, repo="acme/app", capability="shell")
+
+    assert decision.mode == "require_approval"
+    assert decision.reason == "repo_policy"
+    assert decision.matched_repo == "acme/app"
+
+
+def test_split_repo_policy_missing_capability_uses_default_mode() -> None:
+    # Regression (P1): if no entry for this repo declares the capability,
+    # we still fall back to default_mode, but matched_repo should reflect
+    # that some entry did match the repo (so observers know we looked).
+    policy = PolicyMatrix(
+        default_mode="require_approval",
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                capabilities={"read": "auto_allow"},
+            ),
+            RepoPolicy(
+                repo="acme/app",
+                capabilities={"commit": "auto_allow"},
+            ),
+        ],
+    )
+
+    decision = evaluate(policy, repo="acme/app", capability="push")
+
+    assert decision.mode == "require_approval"
+    assert decision.reason == "default_mode"
+    assert decision.matched_repo == "acme/app"
 
 
 def test_ownership_class_match_uses_repo_policy() -> None:
