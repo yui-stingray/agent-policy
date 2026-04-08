@@ -4,11 +4,11 @@ Why: show how a PreToolUse hook or shell wrapper turns a PolicyDecision
      into a JSON payload + a process exit code.
 
 Prerequisite: agent-policy must be importable. Install it with
-    pip install agent-policy
+    pip install yui-agent-policy
 or, from a source checkout of this repo, `pip install -e .` from the
 repo root. This file deliberately does not manipulate sys.path — it is
 meant to be copied verbatim into a downstream project that already has
-agent-policy installed.
+yui-agent-policy installed (import name remains `agent_policy`).
 
 Usage:
     python examples/check.py \
