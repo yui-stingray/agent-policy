@@ -19,11 +19,14 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Security",
+    "Typing :: Typed",
 ]
 dependencies = [
     "pydantic>=2.0",
@@ -36,7 +39,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yui-stingray/agent-policy"
+Repository = "https://github.com/yui-stingray/agent-policy"
 Issues = "https://github.com/yui-stingray/agent-policy/issues"
 
 [tool.hatch.build.targets.wheel]
