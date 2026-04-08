@@ -169,6 +169,10 @@ See [`examples/`](examples/). Runnable after installing the package
 - `policy.toml` — a minimal fail-closed policy with two repos.
 - `check.py` — a tiny CLI wrapper that maps `PolicyDecision` to JSON on
   stdout and a process exit code, suitable for PreToolUse hooks.
+- `claude_code_hook.sh` — a Claude Code `PreToolUse` hook that reads the
+  hook payload from stdin, maps the tool to a capability, and shells out
+  to `check.py`. Set `AGENT_POLICY_FILE` and `AGENT_POLICY_REPO` in the
+  hook's environment, then point `~/.claude/settings.json` at it.
 
 ## Releases
 
