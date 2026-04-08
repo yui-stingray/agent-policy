@@ -1,0 +1,13 @@
+# Where: .gitignore
+# What: keep build/test artefacts and the local venv out of version control.
+# Why: agent-policy is a tiny pure-python package; nothing generated belongs in git.
+
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
