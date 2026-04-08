@@ -1,0 +1,49 @@
+# Where: .github/workflows/ci.yml
+# What: run pytest on every push to master and every PR, with a one-off
+#       packaging sanity check on the 3.12 matrix leg.
+# Why: release.yml only fires on tag push, so day-to-day edits have no
+#      safety net. This workflow is that net — cheap, fast, and catches
+#      both test regressions and metadata/packaging drift before a tag
+#      is cut.
+#
+# Notes:
+# - The 3.11 / 3.12 matrix matches `requires-python = ">=3.11"` in
+#   pyproject.toml. Bump both together if the floor ever moves.
+# - `python -m build` + `twine check` run only on the 3.12 leg because
+#   the sdist/wheel output does not depend on the host Python version.
+#   Running it on every leg would just burn CI minutes.
+
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package + dev deps
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest -q
+
+      - name: Install build + twine
+        if: matrix.python-version == '3.12'
+        run: pip install --upgrade build twine
+      - name: Build sdist + wheel
+        if: matrix.python-version == '3.12'
+        run: python -m build
+      - name: Verify metadata (twine check)
+        if: matrix.python-version == '3.12'
+        run: python -m twine check dist/*
