@@ -173,6 +173,12 @@ See [`examples/`](examples/). Runnable after installing the package
   hook payload from stdin, maps the tool to a capability, and shells out
   to `check.py`. Set `AGENT_POLICY_FILE` and `AGENT_POLICY_REPO` in the
   hook's environment, then point `~/.claude/settings.json` at it.
+- `codex_hook.sh` — a Codex CLI `PreToolUse` hook (**shell guardrail
+  pilot**). Codex hooks currently intercept Bash commands only — read,
+  write, and edit operations are not covered. Maps `git push --force` to
+  `push.force`, `gh pr merge` to `merge.pr`, and everything else to
+  `shell`. Requires `features.codex_hooks = true` in your Codex config
+  and a `hooks.json` in `~/.codex/` or `<repo>/.codex/`.
 
 ## Releases
 
