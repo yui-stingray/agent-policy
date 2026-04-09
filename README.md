@@ -179,6 +179,37 @@ See [`examples/`](examples/). Runnable after installing the package
   `push.force`, `gh pr merge` to `merge.pr`, and everything else to
   `shell`. Requires `features.codex_hooks = true` in your Codex config
   and a `hooks.json` in `~/.codex/` or `<repo>/.codex/`.
+- `capability_map.py` — stdlib-only helper that turns a raw Bash
+  command into one of `push.force` / `merge.pr` / `shell`. Both hook
+  wrappers shell out to it instead of doing substring matching, so
+  quoted literals like `printf '%s\n' 'git push --force'` no longer
+  produce a false `push.force` classification. See the file header
+  for the exact algorithm (heredoc stripping → `shlex` tokenization →
+  scan-anywhere → recursive `bash -c` / `eval`).
+
+### Codex CLI hook — known MVP limitations
+
+The Codex CLI hook feature is marked "Under development" in upstream
+docs. Two gaps affect how `agent-policy` presents decisions through
+it, and they are worth knowing before you enable it:
+
+- **`require_approval` degrades to block.** Codex hook events accept
+  only `allow` or `deny` — there is no `permissionDecision: "ask"`
+  yet. `examples/codex_hook.sh` therefore exits `2` for both
+  `deny` and `require_approval`, and the only UX signal distinguishing
+  the two is the stderr line (`DENY ...` vs
+  `require_approval ...`). Users must retry after manual approval
+  rather than being prompted inline.
+- **Bash-only scope.** Codex hooks intercept shell commands and
+  nothing else. Read, write, and edit tool calls are invisible — if
+  you need capability gating on those, use the Claude Code hook.
+- **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
+  not a full shell. It handles quoted literals, heredocs, compound
+  statements, and the common `bash -c '...'` / `eval` wrappers, but
+  exotic forms such as `git --git-dir=/path push --force`, process
+  substitution, or function definitions are not modeled. The
+  fail-closed default is `shell`, which policy can still flag as
+  `require_approval` or `deny`.
 
 ## Releases
 

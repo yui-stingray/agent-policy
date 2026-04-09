@@ -44,15 +44,22 @@
 #   Read / Glob / Grep         → read
 #   Edit / Write / NotebookEdit → write
 #   Bash:
-#     git push ... --force[-with-lease] → push.force
-#     gh pr merge ...                   → merge.pr
-#     anything else                     → shell
+#     git push ... --force[-with-lease] / -f → push.force
+#     gh pr merge ...                        → merge.pr
+#     anything else                          → shell
 #   any other tool             → write   (fail-closed)
 #
+# Bash parsing: delegated to examples/capability_map.py, which uses
+# shlex tokenization (not full shell semantics). Quoted literals like
+# `printf '%s\n' 'git push --force'` are NOT misclassified as
+# push.force — see capability_map.py header for the algorithm and
+# accepted limitations.
+#
 # Limitations (fine for an example, not for production):
-# - Bash command parsing is substring-based, not a real shell parser.
-#   Compound commands like `git status && git push --force` will still
-#   match push.force, which is the safe direction for a fail-closed gate.
+# - Tokenization is heuristic. Exotic forms such as
+#   `git --git-dir=/path push --force` or process substitution are
+#   not caught. Compound statements are classified per-statement
+#   and the strictest capability wins (fail-closed direction).
 # - No caching: every tool call shells out to python3. For high-frequency
 #   workflows, wrap check.py in a long-lived subprocess instead.
 
@@ -68,6 +75,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_PY="${SCRIPT_DIR}/check.py"
+CAPABILITY_MAP_PY="${SCRIPT_DIR}/capability_map.py"
 
 # Slurp the entire stdin payload once. The hook contract delivers a
 # single JSON object; jq is invoked twice against the same buffer.
@@ -88,21 +96,20 @@ case "$TOOL_NAME" in
         ;;
     Bash)
         COMMAND="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty')"
-        case "$COMMAND" in
-            *"git push"*"--force"*)
-                # Covers both --force and --force-with-lease.
-                CAPABILITY="push.force"
-                ;;
-            *"git push"*" -f "*|*"git push"*" -f")
-                CAPABILITY="push.force"
-                ;;
-            *"gh pr merge"*)
-                CAPABILITY="merge.pr"
-                ;;
-            *)
-                CAPABILITY="shell"
-                ;;
-        esac
+        if [[ -z "$COMMAND" ]]; then
+            echo "agent-policy hook: missing tool_input.command for Bash" >&2
+            exit 1
+        fi
+        # Delegate Bash command → capability to the shlex-based helper.
+        # See codex_hook.sh and capability_map.py for rationale.
+        set +e
+        CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND")"
+        MAP_EXIT=$?
+        set -e
+        if [[ $MAP_EXIT -ne 0 || -z "$CAPABILITY" ]]; then
+            echo "agent-policy hook: capability_map.py failed (exit ${MAP_EXIT})" >&2
+            exit 1
+        fi
         ;;
     *)
         # Unknown tools fall through to write — fail-closed by default.

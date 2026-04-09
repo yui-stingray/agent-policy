@@ -53,14 +53,22 @@
 #   1 — hook error; non-blocking
 #
 # Capability mapping (Bash-only, intentionally narrow):
-#   git push ... --force[-with-lease] → push.force
-#   gh pr merge ...                   → merge.pr
-#   anything else                     → shell
+#   git push ... --force[-with-lease] / -f → push.force
+#   gh pr merge ...                        → merge.pr
+#   anything else                          → shell
+#
+# Parsing: command → capability goes through examples/capability_map.py,
+# which uses shlex tokenization (not full shell semantics) so that
+# quoted literals like `printf '%s\n' 'git push --force'` are NOT
+# misclassified as push.force. See capability_map.py header for the
+# exact algorithm and known limitations.
 #
 # Limitations:
 # - Codex hooks only intercept Bash — read/write/edit tools are invisible.
-# - Command parsing is substring-based, not a real shell parser.
-#   Compound commands are matched conservatively (fail-closed direction).
+# - Tokenization is heuristic, not a real shell. Exotic forms such as
+#   `git --git-dir=/path push --force` or process substitution are
+#   not matched. Compound statements are classified per-statement and
+#   the strictest capability wins (fail-closed direction).
 # - No caching: every Bash call shells out to python3.
 
 set -euo pipefail
@@ -75,6 +83,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_PY="${SCRIPT_DIR}/check.py"
+CAPABILITY_MAP_PY="${SCRIPT_DIR}/capability_map.py"
 
 PAYLOAD="$(cat)"
 
@@ -84,23 +93,18 @@ if [[ -z "$COMMAND" ]]; then
     exit 1
 fi
 
-# Map command → capability. Only three paths — this is a shell guardrail,
-# not full capability-based access control.
-case "$COMMAND" in
-    *"git push"*"--force"*)
-        # Covers both --force and --force-with-lease.
-        CAPABILITY="push.force"
-        ;;
-    *"git push"*" -f "*|*"git push"*" -f")
-        CAPABILITY="push.force"
-        ;;
-    *"gh pr merge"*)
-        CAPABILITY="merge.pr"
-        ;;
-    *)
-        CAPABILITY="shell"
-        ;;
-esac
+# Map command → capability via the shlex-based helper. Passing the
+# command as argv (not stdin) keeps newlines intact and avoids a
+# second pipe. The helper is stdlib-only and exits zero for all
+# classifications, so a non-zero exit here is a real failure.
+set +e
+CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND")"
+MAP_EXIT=$?
+set -e
+if [[ $MAP_EXIT -ne 0 || -z "$CAPABILITY" ]]; then
+    echo "agent-policy hook: capability_map.py failed (exit ${MAP_EXIT})" >&2
+    exit 1
+fi
 
 CHECK_ARGS=(
     --policy "$AGENT_POLICY_FILE"

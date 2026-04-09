@@ -114,6 +114,63 @@ def test_bash_gh_pr_merge_routes_to_merge_pr() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regression: quoted-literal false positives (v0.1.2 fix)
+# ---------------------------------------------------------------------------
+#
+# See tests/test_codex_hook.py for the motivation. The same false
+# positives applied to the Claude Code hook Bash branch because both
+# hooks shared the identical substring case statement. Both branches
+# now delegate to examples/capability_map.py.
+
+
+def test_bash_printf_with_quoted_force_push_is_not_push_force() -> None:
+    import json
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "printf '%s\\n' 'git push --force origin master'"},
+    })
+    result = _run_hook(payload)
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_bash_echo_with_quoted_force_push_is_not_push_force() -> None:
+    import json
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo 'git push --force'"},
+    })
+    result = _run_hook(payload)
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_bash_heredoc_force_push_is_not_push_force() -> None:
+    import json
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "cat <<EOF\ngit push --force\nEOF"},
+    })
+    result = _run_hook(payload)
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_bash_wrapped_force_push_is_still_detected() -> None:
+    import json
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "bash -c 'git push --force origin main'"},
+    })
+    result = _run_hook(payload)
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=push.force" in result.stderr
+
+
+# ---------------------------------------------------------------------------
 # Error paths
 # ---------------------------------------------------------------------------
 

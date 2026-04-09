@@ -98,6 +98,62 @@ def test_gh_pr_merge_routes_to_merge_pr() -> None:
     assert "capability=merge.pr" in result.stderr
 
 
+# ---------------------------------------------------------------------------
+# Regression: quoted-literal false positives (v0.1.2 fix)
+# ---------------------------------------------------------------------------
+#
+# The previous substring matcher classified commands like
+# ``printf '%s\n' 'git push --force origin master'`` as push.force
+# because the forbidden substring was visible in the raw command
+# string. The shlex-based helper (examples/capability_map.py) now
+# tokenizes first, so quoted literals stay opaque.
+#
+# We assert these commands route to the plain ``shell`` capability
+# (which examples/policy.toml still blocks with require_approval) —
+# the distinction is that the blocked reason is ``capability=shell``
+# and NOT ``capability=push.force``. A regression here would mean
+# the old false positive crept back.
+
+
+def test_printf_with_quoted_force_push_is_not_push_force() -> None:
+    result = _run_hook(
+        _codex_payload("printf '%s\\n' 'git push --force origin master'")
+    )
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_echo_with_quoted_force_push_is_not_push_force() -> None:
+    result = _run_hook(_codex_payload("echo 'git push --force'"))
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_heredoc_containing_force_push_is_not_push_force() -> None:
+    result = _run_hook(
+        _codex_payload("cat <<EOF\ngit push --force\nEOF")
+    )
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=shell" in result.stderr
+    assert "capability=push.force" not in result.stderr
+
+
+def test_bash_c_force_push_is_still_detected() -> None:
+    """Recursive classification must still catch wrapper patterns."""
+    result = _run_hook(_codex_payload("bash -c 'git push --force origin main'"))
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=push.force" in result.stderr
+
+
+def test_sudo_force_push_is_still_detected() -> None:
+    """Scan-anywhere must still catch sudo-wrapped force push."""
+    result = _run_hook(_codex_payload("sudo git push --force origin main"))
+    assert result.returncode == HOOK_BLOCK
+    assert "capability=push.force" in result.stderr
+
+
 def test_shell_auto_allow_is_silent_on_permissive_policy() -> None:
     """When shell=auto_allow in policy, the hook must exit 0 with no stderr."""
     # Use a repo/capability that resolves to auto_allow (read on acme/app).

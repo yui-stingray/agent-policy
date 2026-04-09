@@ -1,0 +1,225 @@
+"""Where: tests/test_capability_map.py
+What: Unit tests for examples/capability_map.py — the shlex-based
+      helper that maps a Bash command string to an agent-policy
+      capability (push.force / merge.pr / shell).
+Why: capability_map.py replaces the previous substring matcher in
+     the hook wrappers. The original matcher produced a false positive
+     on quoted literals like ``printf '%s\\n' 'git push --force'``,
+     classifying them as push.force even though the command is never
+     executed. These tests pin:
+
+       1. The false positive is fixed (printf / echo / cat <<EOF).
+       2. The true positives the old matcher caught are still caught
+          (sudo/xargs/bash -c/eval/env-assignment/absolute path).
+       3. The compound command logic picks the strictest capability.
+       4. Defensive fallbacks return ``shell`` rather than crashing.
+
+The helper is stdlib-only by design, so these tests do not need the
+agent_policy package installed.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HELPER_PATH = REPO_ROOT / "examples" / "capability_map.py"
+
+
+def _load_helper():
+    """Load ``examples/capability_map.py`` as a module without install."""
+    spec = importlib.util.spec_from_file_location(
+        "capability_map", HELPER_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["capability_map"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+capability_map = _load_helper()
+map_command = capability_map.map_command
+
+
+# ---------------------------------------------------------------------------
+# Regression: the old substring matcher's false positives
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The original bug report — printf with a quoted literal argument
+        # that happens to contain the substring "git push --force".
+        "printf '%s\\n' 'git push --force origin master'",
+        # Same shape with echo.
+        "echo 'git push --force'",
+        # Double-quoted literal.
+        'echo "git push --force origin main"',
+        # Comment containing the forbidden substring.
+        "ls  # git push --force",
+        # Heredoc body — the body must be elided before tokenization.
+        "cat <<EOF\ngit push --force\nEOF",
+        # Indented heredoc with <<-.
+        "cat <<-END\n\tgit push --force\n\tEND",
+        # Quoted heredoc delimiter (no parameter expansion, but the
+        # body still must be elided).
+        "cat <<'EOF'\ngit push --force\nEOF",
+    ],
+)
+def test_quoted_literal_is_not_push_force(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+# ---------------------------------------------------------------------------
+# True positives: must still classify as push.force
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push --force origin master",
+        "git push --force-with-lease origin master",
+        "git push --force-with-lease=origin/main",
+        "git push -f origin main",
+        # Short-option cluster: -fu == -f -u.
+        "git push -fu origin main",
+        # Leading env assignment — must be stripped before classification.
+        "FOO=bar git push --force origin main",
+        "GIT_SSH_COMMAND='ssh -i key' git push --force origin main",
+        # Absolute path to git — basename normalization.
+        "/usr/bin/git push --force origin main",
+        # Scan-anywhere: sudo / xargs wrappers.
+        "sudo git push --force origin main",
+        "xargs -n1 git push --force origin main",
+        # Compound command: strictest wins.
+        "git status && git push --force",
+        "git push --force; ls",
+        "git fetch || git push --force",
+        "git diff | tee /tmp/x && git push --force",
+        # Recursive: bash -c '...' / sh -c '...' / eval.
+        "bash -c 'git push --force origin main'",
+        'sh -c "git push --force origin main"',
+        'eval "git push --force origin main"',
+    ],
+)
+def test_force_push_is_detected(command: str) -> None:
+    assert map_command(command) == "push.force"
+
+
+# ---------------------------------------------------------------------------
+# True positives: merge.pr
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr merge 42 --merge",
+        "gh pr merge --squash",
+        "sudo gh pr merge 99",
+        "/usr/local/bin/gh pr merge 1",
+    ],
+)
+def test_gh_pr_merge_is_detected(command: str) -> None:
+    assert map_command(command) == "merge.pr"
+
+
+# ---------------------------------------------------------------------------
+# Compound strictness: push.force must win over merge.pr
+# ---------------------------------------------------------------------------
+
+
+def test_compound_strictest_capability_wins() -> None:
+    # merge.pr < push.force on the _STRICTNESS scale — so a pipeline
+    # mixing the two must resolve to push.force.
+    cmd = "gh pr merge 42 && git push --force origin main"
+    assert map_command(cmd) == "push.force"
+
+
+# ---------------------------------------------------------------------------
+# Plain shell commands
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls -la",
+        "git status",
+        "git push origin main",
+        "git push origin main --tags",
+        "git commit -m 'wip'",
+        "pytest -q",
+    ],
+)
+def test_plain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+# ---------------------------------------------------------------------------
+# Defensive fallbacks
+# ---------------------------------------------------------------------------
+
+
+def test_unbalanced_quotes_fall_back_to_shell() -> None:
+    # shlex raises ValueError on unterminated quotes. The helper must
+    # swallow that and return the non-escalating bucket.
+    assert map_command("echo 'unterminated") == "shell"
+
+
+def test_empty_command_is_shell() -> None:
+    assert map_command("") == "shell"
+    assert map_command("   ") == "shell"
+
+
+def test_deeply_nested_bash_c_is_capped() -> None:
+    # Nest bash -c beyond _MAX_RECURSION — the inner push.force should
+    # be hidden but the helper must still terminate and return shell.
+    inner = "git push --force origin main"
+    nested = inner
+    for _ in range(capability_map._MAX_RECURSION + 2):
+        nested = f"bash -c {nested!r}"
+    # Depth cap kicks in before the innermost classification is reached.
+    # The helper may still catch it if the recursion fits under the cap,
+    # so we only assert it did not crash and returned a known bucket.
+    result = map_command(nested)
+    assert result in {"shell", "push.force"}
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def test_main_reads_argv(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["capability_map.py", "git push --force"])
+    exit_code = capability_map.main()
+    assert exit_code == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "push.force"
+
+
+def test_main_reads_stdin(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["capability_map.py"])
+    monkeypatch.setattr(sys, "stdin", _StubStdin("echo 'git push --force'"))
+    exit_code = capability_map.main()
+    assert exit_code == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "shell"
+
+
+class _StubStdin:
+    """Minimal stand-in for sys.stdin exposing ``read()``."""
+
+    def __init__(self, data: str) -> None:
+        self._data = data
+
+    def read(self) -> str:
+        return self._data
