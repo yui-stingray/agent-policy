@@ -213,7 +213,7 @@ it, and they are worth knowing before you enable it:
 
 ## Releases
 
-Tag-driven. Pushing a `vX.Y.Z` annotated tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the sdist + wheel and publishes to PyPI via Trusted Publishing (OIDC). No maintainer-side credentials are required.
+Tag-driven. Pushing a `vX.Y.Z` annotated tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which first verifies that the tag matches `[project].version` in `pyproject.toml`, then builds the sdist + wheel and publishes to PyPI via Trusted Publishing (OIDC). No maintainer-side credentials are required.
 
 ## License
 
