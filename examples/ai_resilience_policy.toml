@@ -1,0 +1,32 @@
+# Where: examples/ai_resilience_policy.toml
+# What: example policy vocabulary for ai-resilience style repositories.
+# Why: show how publication, constitution, and audit actions map to capability decisions.
+
+# Fail closed. New capabilities should require a human until explicitly modeled.
+default_mode = "require_approval"
+
+[[repo_policy]]
+repo = "yui-stingray/ai-resilience-system"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+read = "auto_allow"
+write = "require_approval"
+commit = "require_approval"
+shell = "require_approval"
+"artifact.publish" = "require_approval"
+"constitution.update" = "require_approval"
+"audit.modify" = "require_approval"
+"secret.materialize" = "deny"
+
+[[repo_policy]]
+repo = "yui-stingray/agent-guard"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+read = "auto_allow"
+write = "auto_allow"
+commit = "auto_allow"
+push = "require_approval"
+"artifact.publish" = "require_approval"
+"scanner.policy.update" = "require_approval"
