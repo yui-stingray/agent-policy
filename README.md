@@ -167,6 +167,10 @@ See [`examples/`](examples/). Runnable after installing the package
 (`pip install yui-agent-policy`, or `pip install -e .` from a source checkout):
 
 - `policy.toml` — a minimal fail-closed policy with two repos.
+- `ai_resilience_policy.toml` — a safety-oriented vocabulary example for
+  publication, constitution, audit, secret-materialization, and scanner
+  policy changes. These remain repo-policy capabilities rather than hard
+  guardrails until downstream wrappers prove they are universal invariants.
 - `check.py` — a tiny CLI wrapper that maps `PolicyDecision` to JSON on
   stdout and a process exit code, suitable for PreToolUse hooks.
 - `claude_code_hook.sh` — a Claude Code `PreToolUse` hook that reads the
