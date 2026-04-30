@@ -30,12 +30,11 @@ Those belong in the wrapper layer that calls `evaluate`.
 ## Install
 
 ```bash
-pip install yui-agent-policy  # once published to PyPI
+pip install yui-agent-policy
 ```
 
-From a source checkout (until the PyPI release is live), install the
-package in editable mode so both the library and `examples/check.py` can
-resolve `import agent_policy`:
+From a source checkout, install the package in editable mode so both the
+library and `examples/check.py` can resolve `import agent_policy`:
 
 ```bash
 pip install -e .
