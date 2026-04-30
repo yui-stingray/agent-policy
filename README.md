@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.0` alpha. The public API is frozen for v0.1; examples and
+**Status**: `0.1.3` alpha. The public API is frozen for v0.1; examples and
 hook/wrapper recipes will grow in v0.2.
 
 ## Why
@@ -159,6 +159,28 @@ MVP capabilities (`read`, `write`, `commit`, `push`, `push.force`,
 implies (block, prompt for approval, log and allow).
 
 A runnable minimal wrapper lives in [`examples/check.py`](examples/check.py).
+
+### Approval wrapper checklist
+
+For `require_approval` decisions, keep the approval layer outside
+`agent-policy` but make the wrapper contract explicit. Production wrappers
+should:
+
+- Bind approval records to the exact capability, session, path, and command
+  being executed. A command change after approval should fail closed.
+- Record the source decision event or audit hash in the approval record, then
+  verify that the event still exists before running the approved command.
+- Treat approvals as single-use for side-effecting operations such as
+  `artifact.publish`; reserve a local use marker before executing the command
+  so retry races cannot reuse the same approval.
+- Keep bypass corpora, private logs, `.env*` files, and red-team transcripts
+  outside tracked paths, and add an independent scanner such as
+  `yui-agent-guard` to CI.
+
+These checks belong in the wrapper/admission layer rather than the pure
+evaluator. The `ai_resilience_policy.toml` example shows the capability
+vocabulary; downstream repositories can combine it with their own approval
+record schema and CI gates.
 
 ## Examples
 

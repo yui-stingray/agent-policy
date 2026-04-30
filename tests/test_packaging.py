@@ -19,6 +19,7 @@ import agent_policy
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+README = REPO_ROOT / "README.md"
 PACKAGE_DIR = REPO_ROOT / "src" / "agent_policy"
 
 
@@ -33,6 +34,12 @@ def test_package_version_matches_pyproject() -> None:
     # time is that the two declared values agree. If this fails, bump one
     # side to match the other before tagging.
     assert agent_policy.__version__ == _pyproject_version()
+
+
+def test_readme_status_matches_pyproject_version() -> None:
+    # README is the first thing PyPI users see. Keep the advertised alpha
+    # version aligned with the package metadata so release notes do not drift.
+    assert f"**Status**: `{_pyproject_version()}` alpha." in README.read_text(encoding="utf-8")
 
 
 def test_py_typed_marker_is_present() -> None:
