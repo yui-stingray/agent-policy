@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.3` alpha. The public API is frozen for v0.1; examples and
+**Status**: `0.1.4` alpha. The public API is frozen for v0.1; examples and
 hook/wrapper recipes will grow in v0.2.
 
 ## Why

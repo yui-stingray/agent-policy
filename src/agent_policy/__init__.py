@@ -23,4 +23,4 @@ __all__ = [
     "Reason",
 ]
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
