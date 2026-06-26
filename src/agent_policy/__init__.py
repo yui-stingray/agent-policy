@@ -6,6 +6,12 @@ Why: this is the entire surface that downstream code is allowed to import.
 
 from __future__ import annotations
 
+from .audit import (
+    PolicyAuditEvent,
+    audit_event_asdict,
+    audit_event_to_json,
+    build_audit_event,
+)
 from .decision import Mode, PolicyDecision, Reason
 from .evaluator import evaluate
 from .guardrails import HARD_GUARDRAILS
@@ -18,9 +24,13 @@ __all__ = [
     "PolicyMatrix",
     "RepoPolicy",
     "PolicyDecision",
+    "PolicyAuditEvent",
+    "build_audit_event",
+    "audit_event_asdict",
+    "audit_event_to_json",
     "HARD_GUARDRAILS",
     "Mode",
     "Reason",
 ]
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

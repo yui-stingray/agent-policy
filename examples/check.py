@@ -27,6 +27,9 @@ Usage:
 Output (stdout):
     {"mode": "...", "reason": "...", "matched_repo": "..."}
     matched_repo is serialized as JSON null when no repo entry matched.
+    With --audit-event, stdout is a deterministic wrapper-owned event
+    payload containing repo, capability, context, decision, and any optional
+    session/path/command fields supplied by the caller.
 
 Exit codes:
     0 — auto_allow        (let the tool run)
@@ -54,7 +57,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agent_policy import PolicyDecision, evaluate, load_policy_file
+from agent_policy import (
+    PolicyDecision,
+    audit_event_to_json,
+    build_audit_event,
+    evaluate,
+    load_policy_file,
+)
 
 # Exit codes, centralised so the mapping is obvious at a glance.
 EXIT_AUTO_ALLOW = 0
@@ -129,6 +138,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Set context.first_write_to_repo = true.",
     )
+    parser.add_argument(
+        "--audit-event",
+        action="store_true",
+        help="Print the deterministic audit event schema instead of only the decision.",
+    )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help="Optional wrapper-supplied session identifier for --audit-event.",
+    )
+    parser.add_argument(
+        "--command",
+        default=None,
+        help="Optional wrapper-supplied command string for --audit-event.",
+    )
+    parser.add_argument(
+        "--path",
+        default=None,
+        help="Optional wrapper-supplied path for --audit-event.",
+    )
     return parser.parse_args(argv)
 
 
@@ -150,14 +179,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: failed to load policy file: {exc}", file=sys.stderr)
         return EXIT_PROGRAM_ERROR
 
+    context = _build_context(args)
     decision = evaluate(
         policy,
         repo=args.repo,
         capability=args.capability,
-        context=_build_context(args),
+        context=context,
     )
 
-    print(_decision_to_json(decision))
+    if args.audit_event:
+        event = build_audit_event(
+            repo=args.repo,
+            capability=args.capability,
+            context=context,
+            decision=decision,
+            session_id=args.session_id,
+            command=args.command,
+            path=args.path,
+        )
+        print(audit_event_to_json(event))
+    else:
+        print(_decision_to_json(decision))
 
     exit_code = _MODE_EXIT_CODES.get(decision.mode)
     if exit_code is None:

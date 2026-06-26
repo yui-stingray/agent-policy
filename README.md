@@ -4,8 +4,8 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.4` alpha. The public API is frozen for v0.1; examples and
-hook/wrapper recipes will grow in v0.2.
+**Status**: `0.1.5` alpha. The core evaluator API is stable for v0.1;
+additive wrapper helpers may still grow while the package is alpha.
 
 ## Why
 
@@ -145,6 +145,42 @@ Decisions are evaluated in this order:
 `HARD_GUARDRAILS` is exported as a constant so tooling can assert against
 it without importing private symbols.
 
+## Audit event schema
+
+Wrappers that need logs or approval records can build a deterministic audit
+event from the same inputs they pass to `evaluate`:
+
+```python
+from agent_policy import audit_event_to_json, build_audit_event, evaluate
+
+context = {"ownership_class": "internal"}
+decision = evaluate(policy, repo="acme/app", capability="shell", context=context)
+event = build_audit_event(
+    repo="acme/app",
+    capability="shell",
+    context=context,
+    decision=decision,
+    session_id="session-123",
+    path="scripts/release.sh",
+)
+
+print(audit_event_to_json(event))
+```
+
+The event is an immutable value object with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `repo` | Repository identifier evaluated by the wrapper. |
+| `capability` | Normalized capability evaluated by the wrapper. |
+| `context` | Recursively copied, key-sorted JSON-compatible context used for the decision. |
+| `decision` | Nested `PolicyDecision` payload. |
+| `session_id`, `command`, `path` | Optional wrapper-supplied identifiers. |
+
+`agent-policy` does not persist events, generate timestamps, create IDs,
+hash approvals, or verify approval records. Those remain wrapper-owned side
+effects so the evaluator stays pure and deterministic.
+
 ## Policy file format
 
 ```toml
@@ -198,8 +234,9 @@ should:
 
 - Bind approval records to the exact capability, session, path, and command
   being executed. A command change after approval should fail closed.
-- Record the source decision event or audit hash in the approval record, then
-  verify that the event still exists before running the approved command.
+- Record the serialized audit event or a downstream hash of it in the approval
+  record, then verify that the referenced event still exists before running
+  the approved command.
 - Treat approvals as single-use for side-effecting operations such as
   `artifact.publish`; reserve a local use marker before executing the command
   so retry races cannot reuse the same approval.
@@ -223,7 +260,9 @@ See [`examples/`](examples/). Runnable after installing the package
   policy changes. These remain repo-policy capabilities rather than hard
   guardrails until downstream wrappers prove they are universal invariants.
 - `check.py` — a tiny CLI wrapper that maps `PolicyDecision` to JSON on
-  stdout and a process exit code, suitable for PreToolUse hooks.
+  stdout and a process exit code, suitable for PreToolUse hooks. Pass
+  `--audit-event` to emit the wrapper-owned audit event schema instead of
+  the bare decision payload.
 - `claude_code_hook.sh` — a Claude Code `PreToolUse` hook that reads the
   hook payload from stdin, maps the tool to a capability, and shells out
   to `check.py`. Set `AGENT_POLICY_FILE` and `AGENT_POLICY_REPO` in the

@@ -175,6 +175,35 @@ def test_external_first_write_write_requires_approval() -> None:
     assert payload["reason"] == "hard_guardrail"
 
 
+def test_audit_event_output_is_opt_in() -> None:
+    result = _run_check(
+        "--policy", str(POLICY_TOML),
+        "--repo", "acme/app",
+        "--capability", "commit",
+        "--ownership-class", "internal",
+        "--audit-event",
+        "--session-id", "session-123",
+        "--path", "README.md",
+        "--command", "git status --short",
+    )
+
+    assert result.returncode == EXIT_AUTO_ALLOW
+    payload = _parse_stdout(result)
+    assert payload == {
+        "repo": "acme/app",
+        "capability": "commit",
+        "context": {"ownership_class": "internal"},
+        "decision": {
+            "mode": "auto_allow",
+            "reason": "repo_policy",
+            "matched_repo": "acme/app",
+        },
+        "session_id": "session-123",
+        "path": "README.md",
+        "command": "git status --short",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Program errors: exit 1, never 2.
 # ---------------------------------------------------------------------------

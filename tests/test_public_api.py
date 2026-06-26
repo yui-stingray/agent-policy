@@ -17,17 +17,21 @@ import agent_policy
 from agent_policy import (
     HARD_GUARDRAILS,
     Mode,
+    PolicyAuditEvent,
     PolicyDecision,
     PolicyMatrix,
     Reason,
     RepoPolicy,
+    audit_event_asdict,
+    audit_event_to_json,
+    build_audit_event,
     evaluate,
     load_policy_file,
 )
 
-# The v0.1.0 public surface. Adding or removing an entry here is a breaking
-# change to downstream callers and must be done deliberately — bump the
-# package version and update this set in the same commit.
+# The v0.1 public surface. Adding or removing an entry here is a deliberate
+# contract change for downstream callers — bump the package version and
+# update this set in the same commit.
 EXPECTED_EXPORTS: frozenset[str] = frozenset(
     {
         "evaluate",
@@ -35,6 +39,10 @@ EXPECTED_EXPORTS: frozenset[str] = frozenset(
         "PolicyMatrix",
         "RepoPolicy",
         "PolicyDecision",
+        "PolicyAuditEvent",
+        "build_audit_event",
+        "audit_event_asdict",
+        "audit_event_to_json",
         "HARD_GUARDRAILS",
         "Mode",
         "Reason",
@@ -60,6 +68,10 @@ def test_all_exported_symbols_are_bound() -> None:
         PolicyMatrix,
         RepoPolicy,
         PolicyDecision,
+        PolicyAuditEvent,
+        build_audit_event,
+        audit_event_asdict,
+        audit_event_to_json,
         HARD_GUARDRAILS,
         Mode,
         Reason,
