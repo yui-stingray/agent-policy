@@ -21,6 +21,10 @@ EXPECTED_EXPORTS = {
     "PolicyMatrix",
     "RepoPolicy",
     "PolicyDecision",
+    "PolicyAuditEvent",
+    "build_audit_event",
+    "audit_event_asdict",
+    "audit_event_to_json",
     "HARD_GUARDRAILS",
     "Mode",
     "Reason",
@@ -60,7 +64,15 @@ def main() -> int:
         smoke = textwrap.dedent(
             f"""
             import agent_policy
-            from agent_policy import PolicyDecision, PolicyMatrix, RepoPolicy, evaluate
+            import json
+            from agent_policy import (
+                PolicyDecision,
+                PolicyMatrix,
+                RepoPolicy,
+                audit_event_to_json,
+                build_audit_event,
+                evaluate,
+            )
 
             expected_exports = {sorted(EXPECTED_EXPORTS)!r}
             assert sorted(agent_policy.__all__) == expected_exports
@@ -79,6 +91,13 @@ def main() -> int:
                 reason="repo_policy",
                 matched_repo="myorg/myrepo",
             )
+            event = build_audit_event(
+                repo="myorg/myrepo",
+                capability="read",
+                context={{"ownership_class": "internal"}},
+                decision=decision,
+            )
+            assert json.loads(audit_event_to_json(event))["decision"]["mode"] == "auto_allow"
             """
         )
         run([str(python), "-c", smoke], cwd=temp)
