@@ -27,6 +27,36 @@ place to answer one question, the same way, every time:
 It does **not** parse shell commands, manage state, or send messages.
 Those belong in the wrapper layer that calls `evaluate`.
 
+## Agent safety toolkit
+
+`agent-policy` is one half of a small agent safety toolkit for repositories
+touched by coding agents such as Codex, Claude Code, Aider, and similar tools.
+It answers the runtime authorization question:
+
+> "Given this repo, capability, and context, should the agent be denied,
+> require approval, or be allowed?"
+
+Pair it with [`agent-guard`](https://github.com/yui-stingray/agent-guard),
+which answers the static repository question:
+
+> "Does the repository content still obey the safety rules before hooks, CI,
+> release, or publication?"
+
+The intended split is:
+
+| Layer | Tool | Responsibility |
+| --- | --- | --- |
+| Runtime admission | `agent-policy` | Decide whether a normalized agent action is `deny`, `require_approval`, or `auto_allow`. |
+| Static repository gate | `agent-guard` | Scan paths, text, API surfaces, and pinned digests for repository safety drift. |
+
+A practical setup uses `agent-policy` in a shell hook or wrapper before an
+agent performs a side effect, then runs `agent-guard` in CI or pre-release
+checks before the repository is published or merged.
+
+See
+[`agent-safety-toolkit-example`](https://github.com/yui-stingray/agent-safety-toolkit-example)
+for a small public demo that wires the two tools together.
+
 ## Install
 
 ```bash
