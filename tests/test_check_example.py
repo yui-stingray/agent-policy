@@ -204,6 +204,33 @@ def test_audit_event_output_is_opt_in() -> None:
     }
 
 
+def test_audit_event_preserves_require_approval_exit_code() -> None:
+    result = _run_check(
+        "--policy", str(POLICY_TOML),
+        "--repo", "acme/app",
+        "--capability", "shell",
+        "--ownership-class", "internal",
+        "--audit-event",
+        "--session-id", "session-456",
+        "--path", "scripts/release.sh",
+        "--command", "bash scripts/release.sh",
+    )
+
+    assert result.returncode == EXIT_REQUIRE_APPROVAL
+    payload = _parse_stdout(result)
+    assert payload["repo"] == "acme/app"
+    assert payload["capability"] == "shell"
+    assert payload["context"] == {"ownership_class": "internal"}
+    assert payload["decision"] == {
+        "mode": "require_approval",
+        "reason": "repo_policy",
+        "matched_repo": "acme/app",
+    }
+    assert payload["session_id"] == "session-456"
+    assert payload["path"] == "scripts/release.sh"
+    assert payload["command"] == "bash scripts/release.sh"
+
+
 # ---------------------------------------------------------------------------
 # Program errors: exit 1, never 2.
 # ---------------------------------------------------------------------------

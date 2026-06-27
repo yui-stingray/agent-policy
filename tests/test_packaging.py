@@ -42,6 +42,20 @@ def test_readme_status_matches_pyproject_version() -> None:
     assert f"**Status**: `{_pyproject_version()}` alpha." in README.read_text(encoding="utf-8")
 
 
+def test_readme_documents_wrapper_contract_summary() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert "### Wrapper contract summary" in readme
+    assert "`evaluate()` performs no I/O" in readme
+    assert "Wrappers own command parsing" in readme
+    assert "`0` for `auto_allow`" in readme
+    assert "`1` for wrapper/program errors" in readme
+    assert "`2` for `require_approval`" in readme
+    assert "`3` for" in readme and "`deny`" in readme
+    assert "`--audit-event` emits deterministic evidence" in readme
+    assert "it is not itself an approval record" in readme
+
+
 def test_py_typed_marker_is_present() -> None:
     # PEP 561: downstream type checkers only read inline types when a
     # zero-byte py.typed marker ships inside the package. If this file

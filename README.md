@@ -244,6 +244,23 @@ should:
   outside tracked paths, and add an independent scanner such as
   `yui-agent-guard` to CI.
 
+### Wrapper contract summary
+
+The stable wrapper contract is:
+
+- `evaluate()` performs no I/O and has no approval, logging, or storage side
+  effects.
+- Wrappers own command parsing, capability normalization, approval storage,
+  logging, redaction, and any human prompt.
+- `examples/check.py` maps decisions to process exits: `0` for `auto_allow`,
+  `1` for wrapper/program errors, `2` for `require_approval`, and `3` for
+  `deny`.
+- Agent-specific hooks may translate both `require_approval` and `deny` to the
+  hook platform's blocking exit code when the platform has no inline approval
+  state.
+- `--audit-event` emits deterministic evidence for the decision that was made;
+  it is not itself an approval record.
+
 These checks belong in the wrapper/admission layer rather than the pure
 evaluator. The `ai_resilience_policy.toml` example shows the capability
 vocabulary; downstream repositories can combine it with their own approval
