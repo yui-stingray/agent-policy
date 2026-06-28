@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 README = REPO_ROOT / "README.md"
 PACKAGE_DIR = REPO_ROOT / "src" / "agent_policy"
+SCHEMA_DIR = PACKAGE_DIR / "schemas"
 
 
 def _pyproject_version() -> str:
@@ -54,6 +55,18 @@ def test_readme_documents_wrapper_contract_summary() -> None:
     assert "`3` for" in readme and "`deny`" in readme
     assert "`--audit-event` emits deterministic evidence" in readme
     assert "it is not itself an approval record" in readme
+    assert "agent_policy.schemas/agent-policy.audit_event.v1.schema.json" in readme
+    assert "redacted before calling `build_audit_event()`" in readme
+    assert "absolute local paths" in readme
+    assert "audit-event schema validation" in readme
+
+
+def test_packaged_audit_event_schema_is_present() -> None:
+    schema = SCHEMA_DIR / "agent-policy.audit_event.v1.schema.json"
+
+    assert (SCHEMA_DIR / "__init__.py").is_file()
+    assert schema.is_file(), f"missing packaged audit event schema: {schema}"
+    assert '"agent-policy audit event v1"' in schema.read_text(encoding="utf-8")
 
 
 def test_py_typed_marker_is_present() -> None:

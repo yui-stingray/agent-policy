@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yui-stingray/agent-policy/schemas/agent-policy.audit_event.v1.schema.json",
+  "title": "agent-policy audit event v1",
+  "type": "object",
+  "required": [
+    "repo",
+    "capability",
+    "context",
+    "decision"
+  ],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "mode",
+        "reason",
+        "matched_repo"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "require_approval",
+            "auto_allow"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "hard_guardrail",
+            "repo_policy",
+            "default_mode",
+            "condition_match",
+            "no_match"
+          ]
+        },
+        "matched_repo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
+

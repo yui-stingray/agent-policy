@@ -64,6 +64,7 @@ def main() -> int:
         smoke = textwrap.dedent(
             f"""
             import agent_policy
+            from importlib import resources
             import json
             from agent_policy import (
                 PolicyDecision,
@@ -98,6 +99,17 @@ def main() -> int:
                 decision=decision,
             )
             assert json.loads(audit_event_to_json(event))["decision"]["mode"] == "auto_allow"
+            schema = json.loads(
+                resources.files("agent_policy.schemas")
+                .joinpath("agent-policy.audit_event.v1.schema.json")
+                .read_text(encoding="utf-8")
+            )
+            assert schema["title"] == "agent-policy audit event v1"
+            assert schema["properties"]["decision"]["properties"]["mode"]["enum"] == [
+                "deny",
+                "require_approval",
+                "auto_allow",
+            ]
             """
         )
         run([str(python), "-c", smoke], cwd=temp)

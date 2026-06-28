@@ -177,9 +177,22 @@ The event is an immutable value object with these fields:
 | `decision` | Nested `PolicyDecision` payload. |
 | `session_id`, `command`, `path` | Optional wrapper-supplied identifiers. |
 
+Installed wheels include a JSON Schema resource at
+`agent_policy.schemas/agent-policy.audit_event.v1.schema.json`. Downstream
+wrappers can load it with `importlib.resources` to validate the event shape
+they write to logs, CI artifacts, or approval records. The schema describes
+the deterministic payload only; it does not prove that a human approval exists.
+
+`session_id`, `command`, and `path` are serialized verbatim when supplied.
+Wrappers must keep them short, repository-relative where applicable, and
+redacted before calling `build_audit_event()`. Do not pass private command
+transcripts, absolute local paths, secrets, or personal identifiers into these
+fields if the event may be stored or published.
+
 `agent-policy` does not persist events, generate timestamps, create IDs,
-hash approvals, or verify approval records. Those remain wrapper-owned side
-effects so the evaluator stays pure and deterministic.
+hash approvals, redact optional wrapper strings, normalize local paths, add a
+`schema_version` field, or verify approval records. Those remain wrapper-owned
+side effects so the evaluator stays pure and deterministic.
 
 ## Policy file format
 
@@ -251,7 +264,7 @@ The stable wrapper contract is:
 - `evaluate()` performs no I/O and has no approval, logging, or storage side
   effects.
 - Wrappers own command parsing, capability normalization, approval storage,
-  logging, redaction, and any human prompt.
+  logging, redaction, audit-event schema validation, and any human prompt.
 - `examples/check.py` maps decisions to process exits: `0` for `auto_allow`,
   `1` for wrapper/program errors, `2` for `require_approval`, and `3` for
   `deny`.
