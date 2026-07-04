@@ -184,13 +184,20 @@ they write to logs, CI artifacts, or approval records. The schema describes
 the deterministic payload only; it does not prove that a human approval exists.
 
 `session_id`, `command`, and `path` are serialized verbatim when supplied.
-The packaged schema now requires these optional strings to be non-empty and
-bounded when present; `session_id` is restricted to a public-safe token
-pattern, and `path` must be relative rather than absolute. Wrappers must
-still keep them short, repository-relative where applicable, and redacted before calling `build_audit_event()`.
+The packaged `.v1` schema intentionally accepts any string for those optional
+fields for backward compatibility. Operators should still enforce public-safe
+values and keep them redacted before calling `build_audit_event()`:
+
+| Field | Recommended operator constraint |
+| --- | --- |
+| `session_id` | 1-256 characters, matching `^[A-Za-z0-9._:@/+~-]+$`. |
+| `command` | 1-4096 characters, redacted, with no control characters: `^[^\x00-\x1f]+$`. |
+| `path` | 1-1024 characters, repository-relative, with no leading slash or control characters: `^[^/\x00-\x1f][^\x00-\x1f]*$`. |
+
 Do not pass private command transcripts, absolute local paths, secrets, or
 personal identifiers into these fields if the event may be stored or
-published.
+published. A future `agent-policy.audit_event.v1.1` schema may make these
+constraints machine-checkable after producer-side enforcement lands first.
 
 `agent-policy` does not persist events, generate timestamps, create IDs,
 hash approvals, redact optional wrapper strings, normalize local paths, add a
