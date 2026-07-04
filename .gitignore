@@ -11,6 +11,7 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+week-logs/
 
 # Editor/agent caches — not part of the package.
 .serena/

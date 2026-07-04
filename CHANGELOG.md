@@ -4,6 +4,15 @@ Where: `CHANGELOG.md`
 What: release notes for published `yui-agent-policy` versions.  
 Why: keep PyPI releases auditable while the package is still alpha.
 
+## 0.1.6 - 2026-07-05
+
+- Updated Codex hook documentation to match current hook matcher coverage,
+  default feature behavior, and `PermissionRequest` delegation semantics.
+- Added a Codex `PermissionRequest` wrapper example that delegates
+  `require_approval` decisions back to Codex's normal approval prompt.
+- Tightened packaged audit-event schema constraints for optional public evidence
+  strings while preserving the existing `.v1` field set.
+
 ## 0.1.5 - 2026-06-26
 
 - Added a deterministic `PolicyAuditEvent` schema and JSON serializer for

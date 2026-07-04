@@ -1,6 +1,7 @@
 """Where: examples/capability_map.py
 What: Map a shell command string to an agent-policy capability for the
-      hook wrappers (codex_hook.sh, claude_code_hook.sh).
+      hook wrappers (codex_hook.sh, codex_permission_request_hook.sh,
+      claude_code_hook.sh).
 
 Why: Earlier versions of the bash hooks used raw substring matching on
      the command string, e.g. ``*"git push"*"--force"*``. This produced

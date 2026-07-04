@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.5` alpha. The core evaluator API is stable for v0.1;
+**Status**: `0.1.6` alpha. The core evaluator API is stable for v0.1;
 additive wrapper helpers may still grow while the package is alpha.
 
 ## Why
@@ -184,10 +184,13 @@ they write to logs, CI artifacts, or approval records. The schema describes
 the deterministic payload only; it does not prove that a human approval exists.
 
 `session_id`, `command`, and `path` are serialized verbatim when supplied.
-Wrappers must keep them short, repository-relative where applicable, and
-redacted before calling `build_audit_event()`. Do not pass private command
-transcripts, absolute local paths, secrets, or personal identifiers into these
-fields if the event may be stored or published.
+The packaged schema now requires these optional strings to be non-empty and
+bounded when present; `session_id` is restricted to a public-safe token
+pattern, and `path` must be relative rather than absolute. Wrappers must
+still keep them short, repository-relative where applicable, and redacted before calling `build_audit_event()`.
+Do not pass private command transcripts, absolute local paths, secrets, or
+personal identifiers into these fields if the event may be stored or
+published.
 
 `agent-policy` does not persist events, generate timestamps, create IDs,
 hash approvals, redact optional wrapper strings, normalize local paths, add a
@@ -297,36 +300,45 @@ See [`examples/`](examples/). Runnable after installing the package
   hook payload from stdin, maps the tool to a capability, and shells out
   to `check.py`. Set `AGENT_POLICY_FILE` and `AGENT_POLICY_REPO` in the
   hook's environment, then point `~/.claude/settings.json` at it.
-- `codex_hook.sh` — a Codex CLI `PreToolUse` hook (**shell guardrail
-  pilot**). Codex hooks currently intercept Bash commands only — read,
-  write, and edit operations are not covered. Maps `git push --force` to
-  `push.force`, `gh pr merge` to `merge.pr`, and everything else to
-  `shell`. Requires `features.codex_hooks = true` in your Codex config
-  and a `hooks.json` in `~/.codex/` or `<repo>/.codex/`.
+- `codex_hook.sh` — a Codex CLI `PreToolUse` hook (**block-style shell
+  guardrail pilot**). This wrapper only maps Bash commands: `git push
+  --force` to `push.force`, `gh pr merge` to `merge.pr`, and everything else
+  to `shell`. Codex hooks themselves can match more than Bash; this example is
+  intentionally narrower.
+- `codex_permission_request_hook.sh` — a Codex CLI `PermissionRequest` hook
+  (**delegation shell pilot**). It returns `allow` for `auto_allow`, returns
+  `deny` for `deny`, and returns no decision for `require_approval`, which
+  delegates to Codex's normal approval prompt.
 - `capability_map.py` — stdlib-only helper that turns a raw Bash
-  command into one of `push.force` / `merge.pr` / `shell`. Both hook
+  command into one of `push.force` / `merge.pr` / `shell`. The hook
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
   produce a false `push.force` classification. See the file header
   for the exact algorithm (heredoc stripping → `shlex` tokenization →
   scan-anywhere → recursive `bash -c` / `eval`).
 
-### Codex CLI hook — known MVP limitations
+### Codex CLI hooks — current contract notes
 
-The Codex CLI hook feature is marked "Under development" in upstream
-docs. Two gaps affect how `agent-policy` presents decisions through
-it, and they are worth knowing before you enable it:
+Codex hooks are default enabled. If you need an explicit feature setting, use
+`features.hooks`; older Codex-specific aliases should be avoided. Put
+`hooks.json` in `~/.codex/` or `<repo>/.codex/`.
 
-- **`require_approval` degrades to block.** Codex hook events accept
-  only `allow` or `deny` — there is no `permissionDecision: "ask"`
-  yet. `examples/codex_hook.sh` therefore exits `2` for both
-  `deny` and `require_approval`, and the only UX signal distinguishing
-  the two is the stderr line (`DENY ...` vs
-  `require_approval ...`). Users must retry after manual approval
-  rather than being prompted inline.
-- **Bash-only scope.** Codex hooks intercept shell commands and
-  nothing else. Read, write, and edit tool calls are invisible — if
-  you need capability gating on those, use the Claude Code hook.
+Current `PreToolUse` matchers can target Bash, `apply_patch`, and MCP tool calls;
+`apply_patch` may also match through `Edit` / `Write` aliases. The examples here
+stay Bash-focused because they reuse `capability_map.py`, which only normalizes
+shell commands.
+
+- **Block-style PreToolUse path.** `permissionDecision: "ask"` is parsed but not supported
+  by current Codex release behavior. A hook that returns it is reported as a hook
+  run failure and the tool call continues. To stop execution from a `PreToolUse`
+  hook, return `permissionDecision: "deny"`, legacy `decision: "block"`, or exit
+  `2`. `examples/codex_hook.sh` uses exit `2` for both `deny` and
+  `require_approval`, with stderr distinguishing the policy decision.
+- **PermissionRequest delegation path.** `PermissionRequest` runs just before
+  Codex asks for approval. A hook can return `allow` or `deny`; if it returns
+  no decision, Codex falls back to the normal approval flow. The
+  `codex_permission_request_hook.sh` example uses that no-decision case for
+  `require_approval`.
 - **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
   not a full shell. It handles quoted literals, heredocs, compound
   statements, and the common `bash -c '...'` / `eval` wrappers, but

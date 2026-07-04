@@ -105,6 +105,9 @@ def main() -> int:
                 .read_text(encoding="utf-8")
             )
             assert schema["title"] == "agent-policy audit event v1"
+            assert schema["properties"]["session_id"]["minLength"] == 1
+            assert schema["properties"]["session_id"]["maxLength"] == 256
+            assert schema["properties"]["path"]["pattern"] == "^[^/\\\\x00-\\\\x1f][^\\\\x00-\\\\x1f]*$"
             assert schema["properties"]["decision"]["properties"]["mode"]["enum"] == [
                 "deny",
                 "require_approval",

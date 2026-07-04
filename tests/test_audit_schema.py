@@ -55,6 +55,30 @@ def test_packaged_audit_schema_pins_decision_enums() -> None:
         "no_match",
     ]
     assert decision["properties"]["matched_repo"]["type"] == ["string", "null"]
+    assert decision["properties"]["matched_repo"]["minLength"] == 1
+    assert decision["properties"]["matched_repo"]["maxLength"] == 256
+
+
+def test_packaged_audit_schema_constrains_optional_strings() -> None:
+    properties = _load_schema()["properties"]
+
+    assert properties["session_id"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9._:@/+~-]+$",
+    }
+    assert properties["command"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+    }
+    assert properties["path"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^[^/\\x00-\\x1f][^\\x00-\\x1f]*$",
+    }
 
 
 def test_packaged_audit_schema_accepts_public_audit_event_shape() -> None:
