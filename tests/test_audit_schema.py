@@ -9,6 +9,8 @@ from importlib import resources
 import json
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from agent_policy import (
     PolicyDecision,
     audit_event_asdict,
@@ -22,6 +24,12 @@ SCHEMA_RESOURCE = "agent-policy.audit_event.v1.schema.json"
 def _load_schema() -> dict[str, Any]:
     schema_path = resources.files("agent_policy.schemas").joinpath(SCHEMA_RESOURCE)
     return json.loads(schema_path.read_text(encoding="utf-8"))
+
+
+def _schema_validator() -> Draft202012Validator:
+    schema = _load_schema()
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema)
 
 
 def test_packaged_audit_schema_matches_current_event_shape() -> None:
@@ -91,6 +99,53 @@ def test_packaged_audit_schema_accepts_public_audit_event_shape() -> None:
     assert set(payload["decision"]) <= set(schema["properties"]["decision"]["properties"])
     assert payload["decision"]["mode"] in schema["properties"]["decision"]["properties"]["mode"]["enum"]
     assert payload["decision"]["reason"] in schema["properties"]["decision"]["properties"]["reason"]["enum"]
+
+
+def test_packaged_audit_schema_validates_current_event_payload() -> None:
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="repo_policy",
+        matched_repo="example/repo",
+    )
+    payload = audit_event_asdict(
+        build_audit_event(
+            repo="example/repo",
+            capability="shell",
+            context={"ownership_class": "internal"},
+            decision=decision,
+            session_id="session-123",
+            command="bash scripts/check.sh",
+            path="scripts/check.sh",
+        )
+    )
+
+    _schema_validator().validate(payload)
+
+
+def test_packaged_audit_schema_rejects_unsupported_payload_shapes() -> None:
+    valid_payload: dict[str, Any] = {
+        "repo": "example/repo",
+        "capability": "shell",
+        "context": {"ownership_class": "internal"},
+        "decision": {
+            "mode": "require_approval",
+            "reason": "repo_policy",
+            "matched_repo": "example/repo",
+        },
+    }
+    invalid_payloads = [
+        {key: value for key, value in valid_payload.items() if key != "decision"},
+        {**valid_payload, "extra": "not part of audit_event.v1"},
+        {**valid_payload, "decision": {**valid_payload["decision"], "mode": "review_later"}},
+        {**valid_payload, "decision": {**valid_payload["decision"], "reason": "unknown_reason"}},
+        {**valid_payload, "decision": {**valid_payload["decision"], "extra": "not allowed"}},
+        {**valid_payload, "repo": ""},
+        {**valid_payload, "capability": ""},
+    ]
+
+    validator = _schema_validator()
+    for payload in invalid_payloads:
+        assert not validator.is_valid(payload), payload
 
 
 def test_audit_event_intentionally_omits_generated_metadata() -> None:
