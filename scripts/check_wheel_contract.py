@@ -105,6 +105,9 @@ def main() -> int:
                 .read_text(encoding="utf-8")
             )
             assert schema["title"] == "agent-policy audit event v1"
+            assert schema["properties"]["session_id"] == {{"type": "string"}}
+            assert schema["properties"]["command"] == {{"type": "string"}}
+            assert schema["properties"]["path"] == {{"type": "string"}}
             assert schema["properties"]["decision"]["properties"]["mode"]["enum"] == [
                 "deny",
                 "require_approval",

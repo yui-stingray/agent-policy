@@ -57,6 +57,17 @@ def test_packaged_audit_schema_pins_decision_enums() -> None:
     assert decision["properties"]["matched_repo"]["type"] == ["string", "null"]
 
 
+def test_packaged_audit_schema_keeps_v1_optional_strings_unconstrained() -> None:
+    properties = _load_schema()["properties"]
+
+    assert properties["session_id"] == {"type": "string"}
+    assert properties["command"] == {"type": "string"}
+    assert properties["path"] == {"type": "string"}
+    assert properties["decision"]["properties"]["matched_repo"] == {
+        "type": ["string", "null"]
+    }
+
+
 def test_packaged_audit_schema_accepts_public_audit_event_shape() -> None:
     decision = PolicyDecision(
         mode="require_approval",
@@ -100,3 +111,27 @@ def test_audit_event_intentionally_omits_generated_metadata() -> None:
     assert "event_id" not in payload
     assert "timestamp" not in payload
     assert "schema_version" not in payload
+
+
+def test_audit_event_v1_preserves_legacy_optional_string_values() -> None:
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="repo_policy",
+        matched_repo="example repo",
+    )
+    payload = audit_event_asdict(
+        build_audit_event(
+            repo="example/repo",
+            capability="shell",
+            context={},
+            decision=decision,
+            session_id="session with space",
+            command="",
+            path="/home/user/x",
+        )
+    )
+
+    assert payload["decision"]["matched_repo"] == "example repo"
+    assert payload["session_id"] == "session with space"
+    assert payload["command"] == ""
+    assert payload["path"] == "/home/user/x"

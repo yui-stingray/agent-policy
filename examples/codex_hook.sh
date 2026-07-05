@@ -2,23 +2,24 @@
 # Where: examples/codex_hook.sh
 # What: minimal Codex CLI PreToolUse hook that consults agent-policy
 #       before allowing a Bash command. Shell guardrail pilot — this
-#       does NOT cover read/write/edit (Codex hooks only intercept Bash).
+#       wrapper does not normalize apply_patch or MCP tool payloads.
 # Why: agent-policy is a pure decision function. This wrapper maps a
 #      Bash command to one of three capabilities (push.force, merge.pr,
 #      shell) and delegates the policy decision to examples/check.py.
 #
-# Scope: shell guardrail pilot only. Codex CLI hooks currently intercept
-#        Bash commands and nothing else. Read, write, and edit operations
-#        are NOT covered by this hook. Do not rely on it for full
-#        capability-based access control — use the Claude Code hook
-#        (examples/claude_code_hook.sh) if your agent supports it.
+# Scope: shell guardrail pilot only. This wrapper only maps Bash commands
+#        even though Codex hooks can also match apply_patch and MCP tools.
+#        Do not rely on this example for full capability-based access
+#        control; add tool-specific normalization before broadening its
+#        matcher.
 #
 # Requires: bash 4+, jq, and a python3 on PATH that can `import agent_policy`
 #           (i.e. the same interpreter that has yui-agent-policy installed).
 #
 # Install:
-#   1. Enable hooks in your Codex CLI config:
-#        features.codex_hooks = true
+#   1. Hooks are default enabled in current Codex. If you need to set the
+#      feature explicitly, use:
+#        features.hooks = true
 #
 #   2. Place hooks.json in ~/.codex/ or <repo>/.codex/:
 #
@@ -64,7 +65,8 @@
 # exact algorithm and known limitations.
 #
 # Limitations:
-# - Codex hooks only intercept Bash — read/write/edit tools are invisible.
+# - This example covers only Bash PreToolUse payloads. Broader Codex hook
+#   matchers need their own capability normalization.
 # - Tokenization is heuristic, not a real shell. Exotic forms such as
 #   `git --git-dir=/path push --force` or process substitution are
 #   not matched. Compound statements are classified per-statement and

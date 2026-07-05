@@ -1,6 +1,7 @@
 """Where: tests/test_codex_hook.py
 What: subprocess-driven contract tests for examples/codex_hook.sh.
-Why: the Codex hook is a shell guardrail pilot — it only intercepts Bash.
+Why: this Codex hook is a shell guardrail pilot — it only handles Bash
+     PreToolUse events even though Codex hooks can also match other tools.
      These tests pin the capability mapping (push.force / merge.pr / shell)
      and exit-code translation so drift between check.py and the hook is
      caught by CI, not by a user in production.
@@ -157,7 +158,7 @@ def test_sudo_force_push_is_still_detected() -> None:
 def test_shell_auto_allow_is_silent_on_permissive_policy() -> None:
     """When shell=auto_allow in policy, the hook must exit 0 with no stderr."""
     # Use a repo/capability that resolves to auto_allow (read on acme/app).
-    # Since Codex hooks only handle Bash, we simulate by directly testing
+    # Since this wrapper only handles Bash, we simulate by directly testing
     # the exit path: a safe command on a repo where shell is auto_allow
     # would need a policy entry for it. Instead, we test that the hook
     # stays silent on auto_allow by using a write-capable command on a
@@ -185,3 +186,13 @@ def test_empty_payload_is_hook_error() -> None:
     result = _run_hook("{}")
     assert result.returncode == HOOK_ERROR
     assert "missing tool_input.command" in result.stderr
+
+
+def test_hook_comments_do_not_restate_stale_codex_limitations() -> None:
+    hook = HOOK_SH.read_text(encoding="utf-8")
+
+    assert "features.codex_hooks" not in hook
+    assert "features.hooks" in hook
+    assert "Codex hooks only intercept Bash" not in hook
+    assert "This wrapper only maps Bash commands" in hook
+    assert "Codex hooks can also match apply_patch and MCP tools" in hook

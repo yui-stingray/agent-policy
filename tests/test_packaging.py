@@ -61,6 +61,19 @@ def test_readme_documents_wrapper_contract_summary() -> None:
     assert "audit-event schema validation" in readme
 
 
+def test_readme_codex_hook_docs_match_current_contract() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert "features.codex_hooks" not in readme
+    assert "features.hooks" in readme
+    assert "default enabled" in readme
+    assert "Bash, `apply_patch`, and MCP tool calls" in readme
+    assert 'permissionDecision: "ask"' in readme
+    assert "parsed but not supported" in readme
+    assert "PermissionRequest" in readme
+    assert "delegates to Codex's normal approval prompt" in readme
+
+
 def test_packaged_audit_event_schema_is_present() -> None:
     schema = SCHEMA_DIR / "agent-policy.audit_event.v1.schema.json"
 
