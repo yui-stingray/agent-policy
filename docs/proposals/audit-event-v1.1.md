@@ -26,7 +26,9 @@ after producers enforce them before serialization.
 1. Keep publishing `agent-policy.audit_event.v1` exactly as-is for existing
    consumers.
 2. Add producer-side normalization and enforcement in wrapper examples first,
-   without changing `build_audit_event()` semantics.
+   without changing `build_audit_event()` semantics. `examples/check.py` now
+   enforces these constraints for `--audit-event`; the schema remains
+   unchanged.
 3. Add a new schema resource with a new version id, for example
    `agent-policy.audit_event.v1.1.schema.json`.
 4. Let downstream consumers opt into the stricter schema while retaining `.v1`

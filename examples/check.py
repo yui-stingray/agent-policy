@@ -53,8 +53,9 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import re
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from agent_policy import (
@@ -76,6 +77,73 @@ _MODE_EXIT_CODES: dict[str, int] = {
     "require_approval": EXIT_REQUIRE_APPROVAL,
     "deny": EXIT_DENY,
 }
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._:@/+~-]+$")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f]")
+
+
+def _has_control_char(value: str) -> bool:
+    return bool(_CONTROL_CHAR_RE.search(value))
+
+
+def _validate_optional_audit_string(
+    *,
+    field: str,
+    value: str | None,
+    max_length: int,
+) -> str | None:
+    if value is None:
+        return None
+    if not value:
+        return f"{field} must not be empty"
+    if len(value) > max_length:
+        return f"{field} must be at most {max_length} characters"
+    if _has_control_char(value):
+        return f"{field} must not contain control characters"
+    return None
+
+
+def _validate_audit_event_args(args: argparse.Namespace) -> str | None:
+    """Validate optional public audit strings before serializing them.
+
+    build_audit_event() deliberately preserves caller-supplied optional
+    strings for backward compatibility. This example wrapper is the producer
+    boundary, so it enforces public-safe constraints before emitting evidence.
+    """
+    if not args.audit_event:
+        return None
+
+    session_error = _validate_optional_audit_string(
+        field="session_id",
+        value=args.session_id,
+        max_length=256,
+    )
+    if session_error is not None:
+        return session_error
+    if args.session_id is not None and _SESSION_ID_RE.fullmatch(args.session_id) is None:
+        return "session_id contains unsupported characters"
+
+    command_error = _validate_optional_audit_string(
+        field="command",
+        value=args.command,
+        max_length=4096,
+    )
+    if command_error is not None:
+        return command_error
+
+    path_error = _validate_optional_audit_string(
+        field="path",
+        value=args.path,
+        max_length=1024,
+    )
+    if path_error is not None:
+        return path_error
+    if args.path is not None:
+        windows_path = PureWindowsPath(args.path)
+        if args.path.startswith(("/", "\\")) or windows_path.is_absolute() or windows_path.drive:
+            return "path must be repository-relative"
+        if args.path == "~" or args.path.startswith(("~/", "~\\")):
+            return "path must not use a local home shorthand"
+    return None
 
 
 def _build_context(args: argparse.Namespace) -> dict[str, Any]:
@@ -169,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
         # our require_approval judgment. Normalize all arg errors to 1 so
         # wrappers never confuse "bad args" with "needs a human".
         return EXIT_PROGRAM_ERROR if exc.code not in (None, 0) else int(exc.code or 0)
+
+    audit_args_error = _validate_audit_event_args(args)
+    if audit_args_error is not None:
+        print(f"error: invalid audit event argument: {audit_args_error}", file=sys.stderr)
+        return EXIT_PROGRAM_ERROR
 
     try:
         policy = load_policy_file(args.policy)

@@ -18,6 +18,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -28,6 +29,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECK_PY = REPO_ROOT / "examples" / "check.py"
 POLICY_TOML = REPO_ROOT / "examples" / "policy.toml"
+BASE_AUDIT_ARGS: Final[tuple[str, ...]] = (
+    "--policy",
+    str(POLICY_TOML),
+    "--repo",
+    "acme/app",
+    "--capability",
+    "commit",
+    "--ownership-class",
+    "internal",
+    "--audit-event",
+)
 
 
 # Exit codes mirrored from examples/check.py. Keep these in sync with that
@@ -229,6 +241,55 @@ def test_audit_event_preserves_require_approval_exit_code() -> None:
     assert payload["session_id"] == "session-456"
     assert payload["path"] == "scripts/release.sh"
     assert payload["command"] == "bash scripts/release.sh"
+
+
+def test_audit_event_accepts_tilde_prefixed_repo_relative_path() -> None:
+    result = _run_check(
+        *BASE_AUDIT_ARGS,
+        "--path",
+        "~docs/file.txt",
+    )
+
+    assert result.returncode == EXIT_AUTO_ALLOW
+    payload = _parse_stdout(result)
+    assert payload["path"] == "~docs/file.txt"
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "raw_value"),
+    [
+        (("--session-id", "session with space"), "session with space"),
+        (("--session-id", ""), ""),
+        (("--command", ""), ""),
+        (("--command", "git status\ncat redacted.txt"), "git status\ncat redacted.txt"),
+        (("--path", "/REDACTED/project/file.txt"), "/REDACTED/project/file.txt"),
+        (("--path", r"C:\REDACTED\project\file.txt"), r"C:\REDACTED\project\file.txt"),
+        (("--path", "~/project/file.txt"), "~/project/file.txt"),
+    ],
+)
+def test_invalid_audit_event_optional_strings_are_rejected_without_echoing_values(
+    extra_args: tuple[str, str],
+    raw_value: str,
+) -> None:
+    result = _run_check(*BASE_AUDIT_ARGS, *extra_args)
+
+    assert result.returncode == EXIT_PROGRAM_ERROR
+    assert result.stdout == ""
+    assert "invalid audit event argument" in result.stderr
+    if raw_value:
+        assert raw_value not in result.stderr
+
+
+def test_audit_event_rejects_overlong_optional_strings_without_serializing() -> None:
+    result = _run_check(
+        *BASE_AUDIT_ARGS,
+        "--session-id",
+        "a" * 257,
+    )
+
+    assert result.returncode == EXIT_PROGRAM_ERROR
+    assert result.stdout == ""
+    assert "session_id" in result.stderr
 
 
 # ---------------------------------------------------------------------------

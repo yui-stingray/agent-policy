@@ -196,8 +196,12 @@ values and keep them redacted before calling `build_audit_event()`:
 
 Do not pass private command transcripts, absolute local paths, secrets, or
 personal identifiers into these fields if the event may be stored or
-published. A future `agent-policy.audit_event.v1.1` schema may make these
-constraints machine-checkable after producer-side enforcement lands first.
+published. The bundled `examples/check.py --audit-event` producer enforces
+these stricter optional-field constraints before serialization, including
+rejection of absolute POSIX paths, Windows drive or UNC paths, local home
+shorthand, empty strings, overlong values, and control characters. A future
+`agent-policy.audit_event.v1.1` schema may make these constraints
+machine-checkable for downstream consumers.
 
 `agent-policy` does not persist events, generate timestamps, create IDs,
 hash approvals, redact optional wrapper strings, normalize local paths, add a

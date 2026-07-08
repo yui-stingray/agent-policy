@@ -4,6 +4,13 @@ Where: `CHANGELOG.md`
 What: release notes for published `yui-agent-policy` versions.  
 Why: keep PyPI releases auditable while the package is still alpha.
 
+## Unreleased
+
+- Hardened `examples/check.py --audit-event` so optional wrapper-supplied
+  `session_id`, `command`, and `path` values are validated before
+  serialization and invalid values fail as program errors without echoing the
+  supplied value.
+
 ## 0.1.6 - 2026-07-05
 
 - Updated Codex hook documentation to match current hook matcher coverage,
