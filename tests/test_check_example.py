@@ -256,6 +256,26 @@ def test_audit_event_accepts_tilde_prefixed_repo_relative_path() -> None:
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "docs/file.txt",
+        "src/module/file.py",
+        "folder.with.dots/file.txt",
+    ],
+)
+def test_audit_event_accepts_repo_relative_paths(path: str) -> None:
+    result = _run_check(
+        *BASE_AUDIT_ARGS,
+        "--path",
+        path,
+    )
+
+    assert result.returncode == EXIT_AUTO_ALLOW
+    payload = _parse_stdout(result)
+    assert payload["path"] == path
+
+
+@pytest.mark.parametrize(
     ("extra_args", "raw_value"),
     [
         (("--session-id", "session with space"), "session with space"),
@@ -265,6 +285,30 @@ def test_audit_event_accepts_tilde_prefixed_repo_relative_path() -> None:
         (("--path", "/REDACTED/project/file.txt"), "/REDACTED/project/file.txt"),
         (("--path", r"C:\REDACTED\project\file.txt"), r"C:\REDACTED\project\file.txt"),
         (("--path", "~/project/file.txt"), "~/project/file.txt"),
+        (("--path", "../SENTINEL_OUTSIDE/example.txt"), "../SENTINEL_OUTSIDE/example.txt"),
+        (("--path", "docs/../SENTINEL_OUTSIDE/example.txt"), "docs/../SENTINEL_OUTSIDE/example.txt"),
+        (("--path", r"..\SENTINEL_OUTSIDE\example.txt"), r"..\SENTINEL_OUTSIDE\example.txt"),
+        (("--path", r"docs\..\SENTINEL_OUTSIDE\example.txt"), r"docs\..\SENTINEL_OUTSIDE\example.txt"),
+        (("--path", r"\\SENTINEL_HOST\share\file.txt"), r"\\SENTINEL_HOST\share\file.txt"),
+        (("--path", "$SENTINEL_HOME/project/file.txt"), "$SENTINEL_HOME/project/file.txt"),
+        (("--path", "${SENTINEL_HOME}/project/file.txt"), "${SENTINEL_HOME}/project/file.txt"),
+        (("--path", "${SENTINEL_HOME}suffix/file.txt"), "${SENTINEL_HOME}suffix/file.txt"),
+        (("--path", "${SENTINEL_HOME:-fallback}/file.txt"), "${SENTINEL_HOME:-fallback}/file.txt"),
+        (("--path", "%SENTINEL_HOME%\\project\\file.txt"), "%SENTINEL_HOME%\\project\\file.txt"),
+        (
+            ("--path", "%ProgramFiles(x86)%\\SENTINEL_OUTSIDE\\file.txt"),
+            "%ProgramFiles(x86)%\\SENTINEL_OUTSIDE\\file.txt",
+        ),
+        (
+            ("--path", "%HOMEDRIVE%%HOMEPATH%\\SENTINEL_OUTSIDE\\file.txt"),
+            "%HOMEDRIVE%%HOMEPATH%\\SENTINEL_OUTSIDE\\file.txt",
+        ),
+        (
+            ("--path", "%USERPROFILE%suffix\\SENTINEL_OUTSIDE\\file.txt"),
+            "%USERPROFILE%suffix\\SENTINEL_OUTSIDE\\file.txt",
+        ),
+        (("--path", "file:///SENTINEL_HOST/project/file.txt"), "file:///SENTINEL_HOST/project/file.txt"),
+        (("--path", "file:docs/file.txt"), "file:docs/file.txt"),
     ],
 )
 def test_invalid_audit_event_optional_strings_are_rejected_without_echoing_values(

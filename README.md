@@ -192,16 +192,18 @@ values and keep them redacted before calling `build_audit_event()`:
 | --- | --- |
 | `session_id` | 1-256 characters, matching `^[A-Za-z0-9._:@/+~-]+$`. |
 | `command` | 1-4096 characters, redacted, with no control characters: `^[^\x00-\x1f]+$`. |
-| `path` | 1-1024 characters, repository-relative, with no leading slash or control characters: `^[^/\x00-\x1f][^\x00-\x1f]*$`. |
+| `path` | 1-1024 characters with no leading POSIX slash or control characters: `^[^/\x00-\x1f][^\x00-\x1f]*$`; producers should also reject parent traversal and alternate local-path syntax before treating it as repository-relative. |
 
 Do not pass private command transcripts, absolute local paths, secrets, or
 personal identifiers into these fields if the event may be stored or
 published. The bundled `examples/check.py --audit-event` producer enforces
 these stricter optional-field constraints before serialization, including
-rejection of absolute POSIX paths, Windows drive or UNC paths, local home
-shorthand, empty strings, overlong values, and control characters. A future
-`agent-policy.audit_event.v1.1` schema may make these constraints
-machine-checkable for downstream consumers.
+rejection of parent traversal components, absolute POSIX paths, Windows drive
+or UNC paths, local home or environment shorthand, file URI syntax, empty
+strings, overlong values, and control characters. A future
+`agent-policy.audit_event.v1.1` schema may make stricter constraints
+machine-checkable for downstream consumers, but regex validation alone cannot
+prove repository containment.
 
 `agent-policy` does not persist events, generate timestamps, create IDs,
 hash approvals, redact optional wrapper strings, normalize local paths, add a
