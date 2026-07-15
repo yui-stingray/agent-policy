@@ -83,6 +83,7 @@ _POSIX_ENV_SHORTHAND_RE = re.compile(
     r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}\x00-\x1f]+\})"
 )
 _WINDOWS_ENV_SHORTHAND_RE = re.compile(r"^%[^%=\x00-\x1f]+%")
+_WINDOWS_DELAYED_ENV_SHORTHAND_RE = re.compile(r"^![^!=\x00-\x1f]+!")
 
 
 def _has_control_char(value: str) -> bool:
@@ -112,7 +113,11 @@ def _validate_audit_event_path(value: str) -> str | None:
         return "path must be repository-relative"
     if value == "~" or value.startswith(("~/", "~\\")):
         return "path must not use a local home shorthand"
-    if _POSIX_ENV_SHORTHAND_RE.match(value) or _WINDOWS_ENV_SHORTHAND_RE.match(value):
+    if (
+        _POSIX_ENV_SHORTHAND_RE.match(value)
+        or _WINDOWS_ENV_SHORTHAND_RE.match(value)
+        or _WINDOWS_DELAYED_ENV_SHORTHAND_RE.match(value)
+    ):
         return "path must not use a local environment shorthand"
     if value.lower().startswith("file:"):
         return "path must not use file URI syntax"
