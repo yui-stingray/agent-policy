@@ -9,7 +9,7 @@ Why: keep PyPI releases auditable while the package is still alpha.
 - Hardened `examples/check.py --audit-event` so optional wrapper-supplied
   `session_id`, `command`, and `path` values are validated before
   serialization and invalid values fail as program errors without echoing the
-  supplied value.
+  supplied value, including path traversal and alternate local-path syntax.
 
 ## 0.1.6 - 2026-07-05
 

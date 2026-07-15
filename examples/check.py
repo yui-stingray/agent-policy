@@ -79,6 +79,11 @@ _MODE_EXIT_CODES: dict[str, int] = {
 }
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._:@/+~-]+$")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f]")
+_POSIX_ENV_SHORTHAND_RE = re.compile(
+    r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}\x00-\x1f]+\})"
+)
+_WINDOWS_ENV_SHORTHAND_RE = re.compile(r"^%[^%=\x00-\x1f]+%")
+_WINDOWS_DELAYED_ENV_SHORTHAND_RE = re.compile(r"^![^!\x00-\x1f]+!")
 
 
 def _has_control_char(value: str) -> bool:
@@ -99,6 +104,25 @@ def _validate_optional_audit_string(
         return f"{field} must be at most {max_length} characters"
     if _has_control_char(value):
         return f"{field} must not contain control characters"
+    return None
+
+
+def _validate_audit_event_path(value: str) -> str | None:
+    windows_path = PureWindowsPath(value)
+    if value.startswith(("/", "\\")) or windows_path.is_absolute() or windows_path.drive:
+        return "path must be repository-relative"
+    if value == "~" or value.startswith(("~/", "~\\")):
+        return "path must not use a local home shorthand"
+    if (
+        _POSIX_ENV_SHORTHAND_RE.match(value)
+        or _WINDOWS_ENV_SHORTHAND_RE.match(value)
+        or _WINDOWS_DELAYED_ENV_SHORTHAND_RE.match(value)
+    ):
+        return "path must not use a local environment shorthand"
+    if value.lower().startswith("file:"):
+        return "path must not use file URI syntax"
+    if ".." in re.split(r"[/\\]+", value):
+        return "path must not contain parent traversal components"
     return None
 
 
@@ -138,11 +162,9 @@ def _validate_audit_event_args(args: argparse.Namespace) -> str | None:
     if path_error is not None:
         return path_error
     if args.path is not None:
-        windows_path = PureWindowsPath(args.path)
-        if args.path.startswith(("/", "\\")) or windows_path.is_absolute() or windows_path.drive:
-            return "path must be repository-relative"
-        if args.path == "~" or args.path.startswith(("~/", "~\\")):
-            return "path must not use a local home shorthand"
+        path_boundary_error = _validate_audit_event_path(args.path)
+        if path_boundary_error is not None:
+            return path_boundary_error
     return None
 
 
