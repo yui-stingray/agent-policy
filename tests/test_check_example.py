@@ -315,6 +315,14 @@ def test_audit_event_accepts_repo_relative_paths(path: str) -> None:
             ("--path", "!ProgramFiles(x86)!\\SENTINEL_OUTSIDE\\file.txt"),
             "!ProgramFiles(x86)!\\SENTINEL_OUTSIDE\\file.txt",
         ),
+        (
+            ("--path", r"!SENTINEL_ROOT:\=/!\\SENTINEL_OUTSIDE\\file.txt"),
+            r"!SENTINEL_ROOT:\=/!\\SENTINEL_OUTSIDE\\file.txt",
+        ),
+        (
+            ("--path", r"!=C:!\\SENTINEL_OUTSIDE\\file.txt"),
+            r"!=C:!\\SENTINEL_OUTSIDE\\file.txt",
+        ),
         (("--path", "file:///SENTINEL_HOST/project/file.txt"), "file:///SENTINEL_HOST/project/file.txt"),
         (("--path", "file:docs/file.txt"), "file:docs/file.txt"),
     ],

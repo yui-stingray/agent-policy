@@ -83,7 +83,7 @@ _POSIX_ENV_SHORTHAND_RE = re.compile(
     r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}\x00-\x1f]+\})"
 )
 _WINDOWS_ENV_SHORTHAND_RE = re.compile(r"^%[^%=\x00-\x1f]+%")
-_WINDOWS_DELAYED_ENV_SHORTHAND_RE = re.compile(r"^![^!=\x00-\x1f]+!")
+_WINDOWS_DELAYED_ENV_SHORTHAND_RE = re.compile(r"^![^!\x00-\x1f]+!")
 
 
 def _has_control_char(value: str) -> bool:
