@@ -56,8 +56,12 @@ def test_readme_documents_wrapper_contract_summary() -> None:
     assert "`--audit-event` emits deterministic evidence" in readme
     assert "it is not itself an approval record" in readme
     assert "agent_policy.schemas/agent-policy.audit_event.v1.schema.json" in readme
+    assert "agent_policy.schemas/agent-policy.audit_event.v1.1.schema.json" in readme
+    assert "importlib.resources" in readme
     assert "redacted before calling `build_audit_event()`" in readme
     assert "absolute local paths" in readme
+    assert "Schema validation does not redact values" in readme
+    assert "prove repository containment" in readme
     assert "audit-event schema validation" in readme
 
 
@@ -74,12 +78,21 @@ def test_readme_codex_hook_docs_match_current_contract() -> None:
     assert "delegates to Codex's normal approval prompt" in readme
 
 
-def test_packaged_audit_event_schema_is_present() -> None:
-    schema = SCHEMA_DIR / "agent-policy.audit_event.v1.schema.json"
-
+def test_packaged_audit_event_schemas_are_present() -> None:
     assert (SCHEMA_DIR / "__init__.py").is_file()
-    assert schema.is_file(), f"missing packaged audit event schema: {schema}"
-    assert '"agent-policy audit event v1"' in schema.read_text(encoding="utf-8")
+    for resource, title in [
+        (
+            "agent-policy.audit_event.v1.schema.json",
+            '"agent-policy audit event v1"',
+        ),
+        (
+            "agent-policy.audit_event.v1.1.schema.json",
+            '"agent-policy audit event v1.1"',
+        ),
+    ]:
+        schema = SCHEMA_DIR / resource
+        assert schema.is_file(), f"missing packaged audit event schema: {schema}"
+        assert title in schema.read_text(encoding="utf-8")
 
 
 def test_py_typed_marker_is_present() -> None:

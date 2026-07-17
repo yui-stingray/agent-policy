@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.6` alpha. The core evaluator API is stable for v0.1;
+**Status**: `0.1.7` alpha. The core evaluator API is stable for v0.1;
 additive wrapper helpers may still grow while the package is alpha.
 
 ## Why
@@ -177,16 +177,37 @@ The event is an immutable value object with these fields:
 | `decision` | Nested `PolicyDecision` payload. |
 | `session_id`, `command`, `path` | Optional wrapper-supplied identifiers. |
 
-Installed wheels include a JSON Schema resource at
-`agent_policy.schemas/agent-policy.audit_event.v1.schema.json`. Downstream
-wrappers can load it with `importlib.resources` to validate the event shape
-they write to logs, CI artifacts, or approval records. The schema describes
-the deterministic payload only; it does not prove that a human approval exists.
+Installed wheels include two JSON Schema resources:
+
+| Resource | Contract |
+| --- | --- |
+| `agent_policy.schemas/agent-policy.audit_event.v1.schema.json` | Backward-compatible event shape. Optional wrapper strings remain unconstrained. |
+| `agent_policy.schemas/agent-policy.audit_event.v1.1.schema.json` | Opt-in stricter event shape with additive constraints for `decision.matched_repo`, `session_id`, `command`, and `path`. |
+
+Downstream wrappers can load either resource with `importlib.resources` to
+validate the event shape they write to logs, CI artifacts, or approval records:
+
+```python
+from importlib import resources
+import json
+
+schema_text = (
+    resources.files("agent_policy.schemas")
+    .joinpath("agent-policy.audit_event.v1.1.schema.json")
+    .read_text(encoding="utf-8")
+)
+schema = json.loads(schema_text)
+```
+
+The schemas describe the deterministic payload only; they do not prove that a
+human approval exists.
 
 `session_id`, `command`, and `path` are serialized verbatim when supplied.
 The packaged `.v1` schema intentionally accepts any string for those optional
-fields for backward compatibility. Operators should still enforce public-safe
-values and keep them redacted before calling `build_audit_event()`:
+fields for backward compatibility. The packaged `.v1.1` schema makes the
+recommended length and character constraints machine-checkable for consumers
+that opt in. Operators should still enforce public-safe values and keep them
+redacted before calling `build_audit_event()`:
 
 | Field | Recommended operator constraint |
 | --- | --- |
@@ -200,10 +221,11 @@ published. The bundled `examples/check.py --audit-event` producer enforces
 these stricter optional-field constraints before serialization, including
 rejection of parent traversal components, absolute POSIX paths, Windows drive
 or UNC paths, local home or environment shorthand, file URI syntax, empty
-strings, overlong values, and control characters. A future
-`agent-policy.audit_event.v1.1` schema may make stricter constraints
-machine-checkable for downstream consumers, but regex validation alone cannot
-prove repository containment.
+strings, overlong values, and control characters.
+
+Schema validation does not redact values, scan for secrets, reject parent
+traversal, reject alternate local-path syntax, or prove repository containment.
+Those checks remain producer-owned responsibilities.
 
 `agent-policy` does not persist events, generate timestamps, create IDs,
 hash approvals, redact optional wrapper strings, normalize local paths, add a
@@ -362,7 +384,50 @@ shell commands.
 
 ## Releases
 
-Tag-driven. Pushing a `vX.Y.Z` annotated tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which first verifies that the tag matches `[project].version` in `pyproject.toml`, checks that the version is not already present on PyPI, then builds the sdist + wheel and publishes to PyPI via Trusted Publishing (OIDC). No maintainer-side credentials are required. Manual `workflow_dispatch` with `publish=false` is a build-only dry run; it skips the publish job. Manual `publish=true` must be run against a `v*` tag ref; running it from a branch fails before build.
+Tag-driven. Pushing a `vX.Y.Z` annotated tag triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which verifies
+that the tag matches `[project].version`, points at the current `master`
+commit, and has a successful completed `master` push CI run. It also checks
+that the version is not already present on PyPI, then builds the sdist + wheel
+and publishes through PyPI Trusted Publishing (OIDC). No maintainer-side PyPI
+token is required. Manual `workflow_dispatch` with `publish=false` is a
+build-only dry run; it skips attestation and publication. Manual `publish=true`
+must run against a `v*` tag ref; running it from a branch fails before build.
+
+The release build creates GitHub artifact attestations for `dist/*` before the
+publish job downloads those files. PyPI Trusted Publishing and the PyPA
+publish action also provide PyPI-side distribution attestations. These are
+provenance and integrity evidence for a specific artifact and workflow
+identity. They do not prove code correctness, dependency safety, maintainer
+approval, absence of secrets, or policy compliance.
+
+To verify the GitHub provenance for downloaded `0.1.7` artifacts, check the
+tag, repository, and signer workflow explicitly:
+
+```bash
+mkdir -p dist-verify
+python - <<'PY'
+import json
+import urllib.request
+from pathlib import Path
+
+version = "0.1.7"
+target = Path("dist-verify")
+with urllib.request.urlopen(f"https://pypi.org/pypi/yui-agent-policy/{version}/json") as response:
+    release = json.load(response)
+for file_info in release["urls"]:
+    if file_info["packagetype"] in {"bdist_wheel", "sdist"}:
+        urllib.request.urlretrieve(file_info["url"], target / file_info["filename"])
+PY
+gh attestation verify dist-verify/yui_agent_policy-0.1.7-py3-none-any.whl \
+  --repo yui-stingray/agent-policy \
+  --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.7
+gh attestation verify dist-verify/yui_agent_policy-0.1.7.tar.gz \
+  --repo yui-stingray/agent-policy \
+  --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.7
+```
 
 ## License
 
