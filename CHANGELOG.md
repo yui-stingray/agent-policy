@@ -6,6 +6,9 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+- Hardened the isolated wheel contract smoke to prove installed-package isolation
+  and verify the packaged `agent-policy.audit_event.v1.1` schema shape.
+
 ## 0.1.7 - 2026-07-17
 
 - Added an opt-in `agent-policy.audit_event.v1.1` JSON Schema resource with
