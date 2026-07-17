@@ -11,6 +11,8 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 def check_release_source(
     *, tag_sha: str, master_sha: str, ci_conclusions: list[str]
 ) -> tuple[bool, str]:
+    """Validate that a release commit is current master with successful CI."""
+
     normalized_tag = tag_sha.strip().lower()
     normalized_master = master_sha.strip().lower()
     if not SHA_PATTERN.fullmatch(normalized_tag) or not SHA_PATTERN.fullmatch(
@@ -25,6 +27,8 @@ def check_release_source(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the release-source preflight from command-line arguments."""
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag-sha", required=True)
     parser.add_argument("--master-sha", required=True)

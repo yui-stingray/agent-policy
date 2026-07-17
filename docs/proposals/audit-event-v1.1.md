@@ -18,9 +18,9 @@ evidence validation.
 | Field | Constraint |
 | --- | --- |
 | `decision.matched_repo` | `null` or a 1-256 character string. |
-| `session_id` | 1-256 characters matching `^[A-Za-z0-9._:@/+~-]+$`. |
-| `command` | 1-4096 characters matching `^[^\x00-\x1f]+$` after wrapper redaction. |
-| `path` | 1-1024 characters matching `^[^/\x00-\x1f][^\x00-\x1f]*$` to exclude a leading POSIX slash and control characters; producers must also reject parent traversal and alternate local-path syntax before treating the value as repository-relative. |
+| `session_id` | 1-256 characters matching `^[A-Za-z0-9._:@/+~-]+$(?![\s\S])`; the final lookahead requires true end-of-input. |
+| `command` | 1-4096 characters matching `^[^\x00-\x1f]+$(?![\s\S])` after wrapper redaction. |
+| `path` | 1-1024 characters matching `^[^/\x00-\x1f][^\x00-\x1f]*$(?![\s\S])` to exclude a leading POSIX slash and control characters; producers must also reject parent traversal and alternate local-path syntax before treating the value as repository-relative. |
 
 ## Availability
 

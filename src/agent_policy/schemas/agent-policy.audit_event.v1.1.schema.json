@@ -63,19 +63,19 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
-      "pattern": "^[A-Za-z0-9._:@/+~-]+$"
+      "pattern": "^[A-Za-z0-9._:@/+~-]+$(?![\\s\\S])"
     },
     "command": {
       "type": "string",
       "minLength": 1,
       "maxLength": 4096,
-      "pattern": "^[^\\u0000-\\u001F]+$"
+      "pattern": "^[^\\u0000-\\u001F]+$(?![\\s\\S])"
     },
     "path": {
       "type": "string",
       "minLength": 1,
       "maxLength": 1024,
-      "pattern": "^[^/\\u0000-\\u001F][^\\u0000-\\u001F]*$"
+      "pattern": "^[^/\\u0000-\\u001F][^\\u0000-\\u001F]*$(?![\\s\\S])"
     }
   },
   "additionalProperties": false

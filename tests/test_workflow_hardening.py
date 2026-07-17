@@ -42,6 +42,25 @@ def test_workflows_force_javascript_actions_to_node24() -> None:
         assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in text
 
 
+def test_ci_declares_read_only_permissions() -> None:
+    workflow = WORKFLOWS["ci"].read_text(encoding="utf-8")
+
+    assert "permissions:\n  contents: read\n\njobs:" in workflow
+
+
+def test_checkout_steps_do_not_persist_credentials() -> None:
+    checkout = "uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
+    checkout_count = 0
+    persistence_count = 0
+    for path in WORKFLOWS.values():
+        workflow = path.read_text(encoding="utf-8")
+        checkout_count += workflow.count(checkout)
+        persistence_count += workflow.count("persist-credentials: false")
+
+    assert checkout_count == 4
+    assert persistence_count == checkout_count
+
+
 def test_release_preflight_requires_current_master_push_ci_success() -> None:
     workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
     assert "Require current protected master with successful CI" in workflow

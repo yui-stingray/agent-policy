@@ -211,9 +211,9 @@ redacted before calling `build_audit_event()`:
 
 | Field | Recommended operator constraint |
 | --- | --- |
-| `session_id` | 1-256 characters, matching `^[A-Za-z0-9._:@/+~-]+$`. |
-| `command` | 1-4096 characters, redacted, with no control characters: `^[^\x00-\x1f]+$`. |
-| `path` | 1-1024 characters with no leading POSIX slash or control characters: `^[^/\x00-\x1f][^\x00-\x1f]*$`; producers should also reject parent traversal and alternate local-path syntax before treating it as repository-relative. |
+| `session_id` | 1-256 characters matching `^[A-Za-z0-9._:@/+~-]+$(?![\s\S])`; the final lookahead requires true end-of-input. |
+| `command` | 1-4096 redacted characters with no control characters, using `^[^\x00-\x1f]+$(?![\s\S])`. |
+| `path` | 1-1024 characters with no leading POSIX slash or control characters, using `^[^/\x00-\x1f][^\x00-\x1f]*$(?![\s\S])`; producers should also reject parent traversal and alternate local-path syntax before treating it as repository-relative. |
 
 Do not pass private command transcripts, absolute local paths, secrets, or
 personal identifiers into these fields if the event may be stored or

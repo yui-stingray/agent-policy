@@ -120,19 +120,19 @@ def test_packaged_audit_schema_v1_1_keeps_shape_and_adds_optional_constraints() 
         "type": "string",
         "minLength": 1,
         "maxLength": 256,
-        "pattern": "^[A-Za-z0-9._:@/+~-]+$",
+        "pattern": "^[A-Za-z0-9._:@/+~-]+$(?![\\s\\S])",
     }
     assert v1_1["properties"]["command"] == {
         "type": "string",
         "minLength": 1,
         "maxLength": 4096,
-        "pattern": "^[^\\u0000-\\u001F]+$",
+        "pattern": "^[^\\u0000-\\u001F]+$(?![\\s\\S])",
     }
     assert v1_1["properties"]["path"] == {
         "type": "string",
         "minLength": 1,
         "maxLength": 1024,
-        "pattern": "^[^/\\u0000-\\u001F][^\\u0000-\\u001F]*$",
+        "pattern": "^[^/\\u0000-\\u001F][^\\u0000-\\u001F]*$(?![\\s\\S])",
     }
 
 
@@ -284,13 +284,16 @@ def test_packaged_audit_schema_v1_1_rejects_stricter_optional_boundaries() -> No
         {**valid_payload, "session_id": ""},
         {**valid_payload, "session_id": "s" * 257},
         {**valid_payload, "session_id": "session with space"},
+        {**valid_payload, "session_id": "session-123\n"},
         {**valid_payload, "command": ""},
         {**valid_payload, "command": "c" * 4097},
         {**valid_payload, "command": "echo\nsecret"},
+        {**valid_payload, "command": "echo safe\n"},
         {**valid_payload, "path": ""},
         {**valid_payload, "path": "p" * 1025},
         {**valid_payload, "path": "/absolute/path"},
         {**valid_payload, "path": "dir/\tfile"},
+        {**valid_payload, "path": "scripts/check.sh\n"},
     ]
 
     validator = _schema_validator(V1_1_SCHEMA_RESOURCE)
