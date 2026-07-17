@@ -66,6 +66,8 @@ def main() -> int:
             import agent_policy
             from importlib import resources
             import json
+            from pathlib import Path
+            import sysconfig
             from agent_policy import (
                 PolicyDecision,
                 PolicyMatrix,
@@ -75,6 +77,8 @@ def main() -> int:
                 evaluate,
             )
 
+            purelib = Path(sysconfig.get_path("purelib")).resolve()
+            assert Path(agent_policy.__file__).resolve().is_relative_to(purelib)
             expected_exports = {sorted(EXPECTED_EXPORTS)!r}
             assert sorted(agent_policy.__all__) == expected_exports
             assert agent_policy.__version__ == {version!r}
@@ -113,9 +117,53 @@ def main() -> int:
                 "require_approval",
                 "auto_allow",
             ]
+            schema_v1_1 = json.loads(
+                resources.files("agent_policy.schemas")
+                .joinpath("agent-policy.audit_event.v1.1.schema.json")
+                .read_text(encoding="utf-8")
+            )
+            assert schema_v1_1["title"] == "agent-policy audit event v1.1"
+            assert schema_v1_1["required"] == schema["required"]
+            assert schema_v1_1["additionalProperties"] == schema["additionalProperties"]
+            assert set(schema_v1_1["properties"]) == set(schema["properties"])
+            assert schema_v1_1["properties"]["decision"]["required"] == schema["properties"][
+                "decision"
+            ]["required"]
+            assert schema_v1_1["properties"]["decision"]["additionalProperties"] == schema[
+                "properties"
+            ]["decision"]["additionalProperties"]
+            assert schema_v1_1["properties"]["decision"]["properties"]["mode"][
+                "enum"
+            ] == schema["properties"]["decision"]["properties"]["mode"]["enum"]
+            assert schema_v1_1["properties"]["decision"]["properties"]["reason"][
+                "enum"
+            ] == schema["properties"]["decision"]["properties"]["reason"]["enum"]
+            assert schema_v1_1["properties"]["decision"]["properties"]["matched_repo"] == {{
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": 256,
+            }}
+            assert schema_v1_1["properties"]["session_id"] == {{
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._:@/+~-]+$(?![\\\\s\\\\S])",
+            }}
+            assert schema_v1_1["properties"]["command"] == {{
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^[^\\\\u0000-\\\\u001F]+$(?![\\\\s\\\\S])",
+            }}
+            assert schema_v1_1["properties"]["path"] == {{
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^[^/\\\\u0000-\\\\u001F][^\\\\u0000-\\\\u001F]*$(?![\\\\s\\\\S])",
+            }}
             """
         )
-        run([str(python), "-c", smoke], cwd=temp)
+        run([str(python), "-I", "-c", smoke], cwd=temp)
 
     print(f"wheel contract OK: {wheel.name}")
     return 0
