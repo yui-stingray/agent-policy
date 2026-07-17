@@ -8,10 +8,13 @@
 # - `twine check` validates README/metadata integrity only. It does NOT catch
 #   server-side policy violations (e.g. PyPI name-similarity rejection). Those
 #   surface at upload time, which is acceptable once the project name is stable.
-# - `id-token: write` is scoped to the publish job only. The build job has no
-#   write permissions so a compromised dependency in `build` cannot mint tokens.
+# - `id-token: write` is scoped to the publish and attestation jobs. The build
+#   job remains read-only while installing dependencies and creating artifacts.
 
 name: release
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
   workflow_dispatch:
@@ -26,6 +29,7 @@ on:
       - 'v*'
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -48,9 +52,15 @@ jobs:
     name: build sdist + wheel
     needs: validate-release-request
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
       - name: Assert tag matches package version
@@ -61,6 +71,33 @@ jobs:
       - name: Check PyPI release state
         if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
         run: python scripts/check_pypi_release_state.py
+      - name: Require current protected master with successful CI
+        if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          mapfile -t conclusions < <(
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --branch master \
+              --commit "$GITHUB_SHA" \
+              --event push \
+              --status completed \
+              --limit 10 \
+              --json conclusion \
+              --jq '.[].conclusion'
+          )
+          args=()
+          for conclusion in "${conclusions[@]}"; do
+            args+=(--ci-conclusion "$conclusion")
+          done
+          python scripts/check_release_source.py \
+            --tag-sha "$GITHUB_SHA" \
+            --master-sha "$(git rev-parse origin/master)" \
+            "${args[@]}"
       - name: Check changelog entry
         run: python scripts/check_changelog.py
       - name: Install build + twine
@@ -71,14 +108,35 @@ jobs:
         run: python -m twine check dist/*
       - name: Verify wheel public contract
         run: python scripts/check_wheel_contract.py
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: dist
           path: dist/
 
+  attest:
+    name: attest release distributions
+    needs: build
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: dist
+          path: dist/
+      - name: Generate provenance attestations for release distributions
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4.1.1
+        with:
+          subject-path: dist/*
+
   publish:
     name: publish to PyPI (OIDC)
-    needs: build
+    needs: [build, attest]
     if: github.event_name == 'push' || (inputs.publish && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     environment:
@@ -87,12 +145,12 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-      - uses: actions/setup-python@v6
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
       - name: Verify published package from PyPI

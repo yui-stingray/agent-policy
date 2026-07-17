@@ -6,10 +6,22 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+## 0.1.7 - 2026-07-17
+
+- Added an opt-in `agent-policy.audit_event.v1.1` JSON Schema resource with
+  stricter optional-field constraints while leaving the existing `.v1` schema
+  and `build_audit_event()` semantics unchanged.
 - Hardened `examples/check.py --audit-event` so optional wrapper-supplied
   `session_id`, `command`, and `path` values are validated before
   serialization and invalid values fail as program errors without echoing the
   supplied value, including path traversal and alternate local-path syntax.
+- Documented that schema validation is resource-only evidence checking; it does
+  not prove human approval, public safety, redaction, secret scanning, local
+  path rejection, or repository containment.
+- Hardened release provenance by requiring tags to point at the current
+  `master` commit with successful CI, pinning external Actions to reviewed
+  commits, and generating GitHub attestations for the built wheel and sdist
+  before PyPI Trusted Publishing.
 
 ## 0.1.6 - 2026-07-05
 
