@@ -394,6 +394,26 @@ token is required. Manual `workflow_dispatch` with `publish=false` is a
 build-only dry run; it skips attestation and publication. Manual `publish=true`
 must run against a `v*` tag ref; running it from a branch fails before build.
 
+After PyPI publication succeeds, the separate
+[`github-release`](.github/workflows/github-release.yml) workflow creates or
+updates the GitHub Release notes from the verified tag commit. Automatic runs
+only proceed when the completed `release.yml` workflow ran for the same peeled
+tag commit. Manual retries accept only exact `vX.Y.Z` tags, require a
+successful completed tag-push `release.yml` run for that same tag commit, and
+first verify that PyPI already lists both the wheel and sdist for the version.
+Start a manual retry from the repository's default branch; the separate `tag`
+input selects the historical release. A dispatch that selects a tag or another
+branch as the workflow ref fails before checkout. The PyPI verifier is checked
+out at the dispatch-time default-branch commit before the job detaches to the
+older release tag, so supported GitHub Release retries for old tags keep using
+the hardened verifier logic. Historical workflow definitions are not changed
+retroactively; do not dispatch this workflow from an older branch or tag.
+Immediately before publication, the job re-fetches the remote tag and requires
+its peeled commit to remain unchanged.
+Manual retry is intentionally unavailable for legacy tags that do not have a
+matching successful tag-push `release.yml` run; backfilling those releases is a
+separate maintainer-reviewed operation.
+
 The release build creates GitHub artifact attestations for `dist/*` before the
 publish job downloads those files. PyPI Trusted Publishing and the PyPA
 publish action also provide PyPI-side distribution attestations. These are

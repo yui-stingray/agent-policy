@@ -110,3 +110,70 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
     assert "artifact-metadata: write" in attest_job
     assert "id-token: write" in publish_job
     assert "attestations: write" not in publish_job
+
+
+def test_github_release_does_not_interpolate_manual_tag_inside_shell_body() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    assert "INPUT_TAG: ${{ inputs.tag }}" in workflow
+    assert workflow.count("${{ inputs.tag }}") == 1
+    assert '[[ ! "$INPUT_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]' in workflow
+    assert "manual release tag must match vX.Y.Z" in workflow
+    assert "not ${tag}" not in workflow
+    assert "not $INPUT_TAG" not in workflow
+
+
+def test_github_release_manual_retry_uses_current_default_branch_verifier() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    default_branch_guard = workflow.index("Require default branch for manual retry")
+    checkout = workflow.index("uses: actions/checkout@")
+    tag_resolution = workflow.index("Resolve release tag")
+    pypi_check = workflow.index("Verify PyPI release is present")
+    assert default_branch_guard < checkout < tag_resolution < pypi_check
+    assert "DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in workflow
+    assert 'if [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then' in workflow
+    assert "manual GitHub Release retry must run from the default branch" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert "not $GITHUB_REF" not in workflow
+
+
+def test_github_release_verifies_peeled_tag_sha_against_release_source() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    assert 'tag_sha="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")"' in workflow
+    assert "echo \"sha=${tag_sha}\"" in workflow
+    assert "Verify release source run" in workflow
+    assert 'if [ "$RELEASE_SHA" != "$WORKFLOW_RUN_HEAD_SHA" ]; then' in workflow
+    assert "--workflow release.yml" in workflow
+    assert '--branch "$RELEASE_TAG"' in workflow
+    assert '--commit "$RELEASE_SHA"' in workflow
+    assert "--event push" in workflow
+    assert "--status completed" in workflow
+    assert 'select(.conclusion == "success")' in workflow
+    assert "actions: read\n  contents: write" in workflow
+
+
+def test_github_release_checks_pypi_before_detaching_for_release_notes() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    pypi_check = workflow.index("Verify PyPI release is present")
+    detach = workflow.index("Detach checkout to release commit")
+    changelog = workflow.index("Extract release notes")
+    github_release = workflow.index("Create or update GitHub release")
+    assert pypi_check < detach < changelog < github_release
+    assert 'python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"' in workflow
+    assert 'git checkout --detach "$RELEASE_SHA"' in workflow
+    assert 'python scripts/check_changelog.py --version "$RELEASE_VERSION" --write-notes release-notes.md' in workflow
+
+
+def test_github_release_rechecks_remote_tag_immediately_before_publication() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    publish_step = workflow[workflow.index("Create or update GitHub release") :]
+    assert 'git fetch --force --no-tags origin "refs/tags/${TAG_NAME}:${remote_tag_ref}"' in publish_step
+    assert 'remote_tag_sha="$(git rev-parse "${remote_tag_ref}^{commit}")"' in publish_step
+    assert 'if [ "$remote_tag_sha" != "$RELEASE_SHA" ]; then' in publish_step
+    assert publish_step.index("release tag changed after verification") < publish_step.index(
+        'gh release view "$TAG_NAME"'
+    )
