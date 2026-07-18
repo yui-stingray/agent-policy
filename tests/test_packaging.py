@@ -45,7 +45,10 @@ def test_readme_status_matches_pyproject_version() -> None:
 
 def test_readme_provenance_download_uses_expected_local_filenames() -> None:
     readme = README.read_text(encoding="utf-8")
+    version = _pyproject_version()
 
+    assert f'version = "{version}"' in readme
+    assert readme.count(f"--source-ref refs/tags/v{version}") == 2
     assert 'target / file_info["filename"]' not in readme
     assert 'f"yui_agent_policy-{version}-py3-none-any.whl"' in readme
     assert 'f"yui_agent_policy-{version}.tar.gz"' in readme
