@@ -57,7 +57,7 @@ def test_checkout_steps_do_not_persist_credentials() -> None:
         checkout_count += workflow.count(checkout)
         persistence_count += workflow.count("persist-credentials: false")
 
-    assert checkout_count == 4
+    assert checkout_count == 5
     assert persistence_count == checkout_count
 
 
@@ -109,7 +109,22 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
     assert "attestations: write" in attest_job
     assert "artifact-metadata: write" in attest_job
     assert "id-token: write" in publish_job
+    assert "contents: read" in publish_job
     assert "attestations: write" not in publish_job
+
+
+def test_release_publish_checks_exact_file_set_before_install_smoke() -> None:
+    workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
+    publish_job = workflow[workflow.index("\n  publish:\n") :]
+
+    exact_check = 'python scripts/check_pypi_release_state.py --require-present "$version"'
+    install_smoke = 'python -m pip install --no-cache-dir --target "$target"'
+    assert exact_check in publish_job
+    assert install_smoke in publish_job
+    assert publish_job.index(exact_check) < publish_job.index(install_smoke)
+    assert "for attempt in {1..10}; do" in publish_job
+    assert "waiting for propagation" in publish_job
+    assert "contents: read\n      id-token: write" in publish_job
 
 
 def test_github_release_does_not_interpolate_manual_tag_inside_shell_body() -> None:
