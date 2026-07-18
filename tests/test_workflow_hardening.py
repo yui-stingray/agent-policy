@@ -114,11 +114,9 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
 
 def test_github_release_does_not_interpolate_manual_tag_inside_shell_body() -> None:
     workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
-    shell_bodies = re.findall(r"\n\s+run:\s+\|\n(?P<body>(?:\s{10}.+\n?)*)", workflow)
 
-    assert shell_bodies
-    assert all("${{ inputs.tag }}" not in body for body in shell_bodies)
     assert "INPUT_TAG: ${{ inputs.tag }}" in workflow
+    assert workflow.count("${{ inputs.tag }}") == 1
     assert '[[ ! "$INPUT_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]' in workflow
     assert "manual release tag must match vX.Y.Z" in workflow
     assert "not ${tag}" not in workflow
