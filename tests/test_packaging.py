@@ -43,6 +43,19 @@ def test_readme_status_matches_pyproject_version() -> None:
     assert f"**Status**: `{_pyproject_version()}` alpha." in README.read_text(encoding="utf-8")
 
 
+def test_readme_provenance_download_uses_expected_local_filenames() -> None:
+    readme = README.read_text(encoding="utf-8")
+    version = _pyproject_version()
+
+    assert f'version = "{version}"' in readme
+    assert readme.count(f"--source-ref refs/tags/v{version}") == 2
+    assert 'target / file_info["filename"]' not in readme
+    assert 'f"yui_agent_policy-{version}-py3-none-any.whl"' in readme
+    assert 'f"yui_agent_policy-{version}.tar.gz"' in readme
+    assert "set(by_name) != expected" in readme
+    assert "target / filename" in readme
+
+
 def test_readme_documents_wrapper_contract_summary() -> None:
     readme = README.read_text(encoding="utf-8")
 

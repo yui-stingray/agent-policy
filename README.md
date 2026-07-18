@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.7` alpha. The core evaluator API is stable for v0.1;
+**Status**: `0.1.8` alpha. The core evaluator API is stable for v0.1;
 additive wrapper helpers may still grow while the package is alpha.
 
 ## Why
@@ -421,7 +421,7 @@ provenance and integrity evidence for a specific artifact and workflow
 identity. They do not prove code correctness, dependency safety, maintainer
 approval, absence of secrets, or policy compliance.
 
-To verify the GitHub provenance for downloaded `0.1.7` artifacts, check the
+To verify the GitHub provenance for downloaded `0.1.8` artifacts, check the
 tag, repository, and signer workflow explicitly:
 
 ```bash
@@ -431,22 +431,29 @@ import json
 import urllib.request
 from pathlib import Path
 
-version = "0.1.7"
+version = "0.1.8"
 target = Path("dist-verify")
 with urllib.request.urlopen(f"https://pypi.org/pypi/yui-agent-policy/{version}/json") as response:
     release = json.load(response)
-for file_info in release["urls"]:
-    if file_info["packagetype"] in {"bdist_wheel", "sdist"}:
-        urllib.request.urlretrieve(file_info["url"], target / file_info["filename"])
+expected = {
+    f"yui_agent_policy-{version}-py3-none-any.whl",
+    f"yui_agent_policy-{version}.tar.gz",
+}
+files = [file_info for file_info in release["urls"] if not file_info.get("yanked", False)]
+by_name = {file_info["filename"]: file_info for file_info in files}
+if len(files) != len(expected) or set(by_name) != expected:
+    raise SystemExit("PyPI release does not contain the exact expected artifact set")
+for filename in sorted(expected):
+    urllib.request.urlretrieve(by_name[filename]["url"], target / filename)
 PY
-gh attestation verify dist-verify/yui_agent_policy-0.1.7-py3-none-any.whl \
+gh attestation verify dist-verify/yui_agent_policy-0.1.8-py3-none-any.whl \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.7
-gh attestation verify dist-verify/yui_agent_policy-0.1.7.tar.gz \
+  --source-ref refs/tags/v0.1.8
+gh attestation verify dist-verify/yui_agent_policy-0.1.8.tar.gz \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.7
+  --source-ref refs/tags/v0.1.8
 ```
 
 ## License

@@ -6,6 +6,8 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+## 0.1.8 - 2026-07-18
+
 - Hardened GitHub Release publication so tag inputs are validated before shell
   use, release notes are generated from the verified tag commit, manual retries
   must start from the current default branch and require the matching successful
@@ -14,6 +16,8 @@ Why: keep PyPI releases auditable while the package is still alpha.
   immediately before publication.
 - Hardened the isolated wheel contract smoke to prove installed-package isolation
   and verify the packaged `agent-policy.audit_event.v1.1` schema shape.
+- Hardened the provenance verification example so response-supplied filenames
+  cannot select local output paths and unexpected artifact sets fail closed.
 
 ## 0.1.7 - 2026-07-17
 
