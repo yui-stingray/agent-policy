@@ -6,9 +6,12 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
-- Changed post-publish PyPI verification to use the exact-version JSON API,
-  with bounded retries for CDN propagation, while preserving the existing
-  pre-upload immutability check and exact non-yanked wheel/sdist contract.
+## 0.1.9 - 2026-07-18
+
+- Changed both the PyPI publish and GitHub Release post-publish gates to use the
+  exact-version JSON API, with bounded retries for CDN propagation, while
+  preserving the existing pre-upload immutability check and requiring the exact
+  non-yanked wheel/sdist set before either workflow succeeds.
 
 ## 0.1.8 - 2026-07-18
 
