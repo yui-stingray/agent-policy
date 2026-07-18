@@ -8,9 +8,10 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 - Hardened GitHub Release publication so tag inputs are validated before shell
   use, release notes are generated from the verified tag commit, manual retries
-  require the matching successful tag-push release workflow, and GitHub Release
-  creation requires the exact non-yanked wheel and sdist set on PyPI and
-  rechecks the remote tag commit immediately before publication.
+  must start from the current default branch and require the matching successful
+  tag-push release workflow, and GitHub Release creation requires the exact
+  non-yanked wheel and sdist set on PyPI and rechecks the remote tag commit
+  immediately before publication.
 - Hardened the isolated wheel contract smoke to prove installed-package isolation
   and verify the packaged `agent-policy.audit_event.v1.1` schema shape.
 

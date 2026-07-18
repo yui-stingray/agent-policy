@@ -123,6 +123,21 @@ def test_github_release_does_not_interpolate_manual_tag_inside_shell_body() -> N
     assert "not $INPUT_TAG" not in workflow
 
 
+def test_github_release_manual_retry_uses_current_default_branch_verifier() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    default_branch_guard = workflow.index("Require default branch for manual retry")
+    checkout = workflow.index("uses: actions/checkout@")
+    tag_resolution = workflow.index("Resolve release tag")
+    pypi_check = workflow.index("Verify PyPI release is present")
+    assert default_branch_guard < checkout < tag_resolution < pypi_check
+    assert "DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in workflow
+    assert 'if [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then' in workflow
+    assert "manual GitHub Release retry must run from the default branch" in workflow
+    assert "ref: ${{ github.sha }}" in workflow
+    assert "not $GITHUB_REF" not in workflow
+
+
 def test_github_release_verifies_peeled_tag_sha_against_release_source() -> None:
     workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
 

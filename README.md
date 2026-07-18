@@ -401,10 +401,15 @@ only proceed when the completed `release.yml` workflow ran for the same peeled
 tag commit. Manual retries accept only exact `vX.Y.Z` tags, require a
 successful completed tag-push `release.yml` run for that same tag commit, and
 first verify that PyPI already lists both the wheel and sdist for the version.
-The PyPI verifier runs from the current workflow checkout before the job
-detaches to the older release tag, so GitHub Release retries for old tags keep
-using the hardened verifier logic. Immediately before publication, the job
-re-fetches the remote tag and requires its peeled commit to remain unchanged.
+Start a manual retry from the repository's default branch; the separate `tag`
+input selects the historical release. A dispatch that selects a tag or another
+branch as the workflow ref fails before checkout. The PyPI verifier is checked
+out at the dispatch-time default-branch commit before the job detaches to the
+older release tag, so supported GitHub Release retries for old tags keep using
+the hardened verifier logic. Historical workflow definitions are not changed
+retroactively; do not dispatch this workflow from an older branch or tag.
+Immediately before publication, the job re-fetches the remote tag and requires
+its peeled commit to remain unchanged.
 Manual retry is intentionally unavailable for legacy tags that do not have a
 matching successful tag-push `release.yml` run; backfilling those releases is a
 separate maintainer-reviewed operation.
