@@ -163,6 +163,9 @@ def test_github_release_checks_pypi_before_detaching_for_release_notes() -> None
     github_release = workflow.index("Create or update GitHub release")
     assert pypi_check < detach < changelog < github_release
     assert 'python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"' in workflow
+    assert "for attempt in {1..5}; do" in workflow
+    assert "waiting for API propagation" in workflow
+    assert "sleep 10" in workflow
     assert 'git checkout --detach "$RELEASE_SHA"' in workflow
     assert 'python scripts/check_changelog.py --version "$RELEASE_VERSION" --write-notes release-notes.md' in workflow
 

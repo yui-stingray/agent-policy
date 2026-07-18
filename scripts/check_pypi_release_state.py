@@ -34,6 +34,18 @@ def fetch_pypi_project(project_name: str) -> dict[str, Any] | None:
         raise
 
 
+def fetch_pypi_release(project_name: str, version: str) -> dict[str, Any] | None:
+    """Return exact-release PyPI JSON metadata, or None when it is absent."""
+    url = f"https://pypi.org/pypi/{project_name}/{version}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
 def check_release_state(project_name: str, version: str, pypi_data: dict[str, Any] | None) -> tuple[bool, str]:
     """Return whether a release may proceed and a human-readable reason."""
     if pypi_data is None:
@@ -50,32 +62,32 @@ def check_release_state(project_name: str, version: str, pypi_data: dict[str, An
     return True, f"PyPI project exists; latest={latest}, candidate={version}"
 
 
-def release_files(
-    pypi_data: dict[str, Any] | None, version: str
-) -> list[tuple[str, str, bool]]:
-    """Return filename, package type, and yanked state for an exact version."""
+def release_files(pypi_data: dict[str, Any] | None) -> list[tuple[str, str, bool]] | None:
+    """Return filename, package type, and yanked state from exact-release JSON."""
     if pypi_data is None:
-        return []
+        return None
 
-    releases = pypi_data.get("releases", {})
-    if not isinstance(releases, dict):
-        return []
-
-    files = releases.get(version, [])
+    files = pypi_data.get("urls", [])
     if not isinstance(files, list):
-        return []
+        return None
 
-    return [
-        (
-            str(file_info.get("filename")),
-            str(file_info.get("packagetype")),
-            bool(file_info.get("yanked", False)),
-        )
-        for file_info in files
-        if isinstance(file_info, dict)
-        and file_info.get("filename") is not None
-        and file_info.get("packagetype") is not None
-    ]
+    parsed: list[tuple[str, str, bool]] = []
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            return None
+        filename = file_info.get("filename")
+        package_type = file_info.get("packagetype")
+        yanked = file_info.get("yanked")
+        if (
+            not isinstance(filename, str)
+            or not filename
+            or not isinstance(package_type, str)
+            or not package_type
+            or not isinstance(yanked, bool)
+        ):
+            return None
+        parsed.append((filename, package_type, yanked))
+    return parsed
 
 
 def expected_release_files(project_name: str, version: str) -> list[tuple[str, str]]:
@@ -91,7 +103,9 @@ def require_release_present(
     project_name: str, version: str, pypi_data: dict[str, Any] | None
 ) -> tuple[bool, str]:
     """Return whether PyPI has exactly the expected non-yanked release files."""
-    files = release_files(pypi_data, version)
+    files = release_files(pypi_data)
+    if files is None:
+        return False, f"PyPI release files do not match expected set: {project_name}=={version}"
     observed = sorted((filename, package_type) for filename, package_type, _yanked in files)
     expected = sorted(expected_release_files(project_name, version))
     if observed != expected:
@@ -107,10 +121,12 @@ def main(argv: list[str]) -> int:
         return 2
 
     project_name, declared_version = load_project_metadata(Path("pyproject.toml"))
-    pypi_data = fetch_pypi_project(project_name)
     if len(argv) == 3:
+        pypi_data = fetch_pypi_release(project_name, argv[2])
         ok, message = require_release_present(project_name, argv[2], pypi_data)
     else:
+        # Avoid caching an exact-version 404 immediately before Trusted Publishing.
+        pypi_data = fetch_pypi_project(project_name)
         ok, message = check_release_state(project_name, declared_version, pypi_data)
     stream = sys.stdout if ok else sys.stderr
     print(message, file=stream)

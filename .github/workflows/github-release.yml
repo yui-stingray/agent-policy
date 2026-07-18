@@ -120,7 +120,19 @@ jobs:
         if: steps.tag.outputs.publish == 'true'
         env:
           RELEASE_VERSION: ${{ steps.tag.outputs.version }}
-        run: python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"
+        run: |
+          set -euo pipefail
+          for attempt in {1..5}; do
+            if python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "PyPI release-state check attempt ${attempt} failed; waiting for API propagation"
+              sleep 10
+            fi
+          done
+          echo "::error::PyPI release did not reach the expected exact file set"
+          exit 1
 
       - name: Detach checkout to release commit
         if: steps.tag.outputs.publish == 'true'
