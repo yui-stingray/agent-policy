@@ -26,10 +26,12 @@ evidence validation.
 
 1. Keep publishing `agent-policy.audit_event.v1` exactly as-is for existing
    consumers.
-2. Add producer-side normalization and enforcement in wrapper examples first,
-   without changing `build_audit_event()` semantics. `examples/check.py` now
-   enforces these constraints for `--audit-event`; the schema remains
-   unchanged for `.v1`.
+2. Add producer-side validation for wrapper-supplied fields in wrapper examples
+   first, without changing `build_audit_event()` semantics. For
+   `--audit-event`, `examples/check.py` validates wrapper-supplied
+   `session_id`, `command`, and `path` values; it does not separately validate
+   `decision.matched_repo`.
+   The schema remains unchanged for `.v1`.
 3. Load the new schema resource with the versioned resource name
    `agent-policy.audit_event.v1.1.schema.json`.
 4. Let downstream consumers opt into the stricter schema while retaining `.v1`

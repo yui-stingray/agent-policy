@@ -425,35 +425,80 @@ To verify the GitHub provenance for downloaded `0.1.9` artifacts, check the
 tag, repository, and signer workflow explicitly:
 
 ```bash
-mkdir -p dist-verify
-python - <<'PY'
+(
+set -euo pipefail
+verify_dir="$(mktemp -d "${TMPDIR:-/tmp}/agent-policy-dist-verify.XXXXXX")"
+trap 'rm -rf -- "$verify_dir"' EXIT
+python - "$verify_dir" <<'PY'
 import json
+import shutil
+import sys
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 version = "0.1.9"
-target = Path("dist-verify")
-with urllib.request.urlopen(f"https://pypi.org/pypi/yui-agent-policy/{version}/json") as response:
+target = Path(sys.argv[1])
+request_timeout_seconds = 20
+metadata_url = f"https://pypi.org/pypi/yui-agent-policy/{version}/json"
+with urllib.request.urlopen(metadata_url, timeout=request_timeout_seconds) as response:
+    final_metadata_url = urlparse(response.geturl())
+    if final_metadata_url.scheme != "https" or final_metadata_url.hostname != "pypi.org":
+        raise SystemExit("PyPI release metadata URL is not an expected HTTPS host")
     release = json.load(response)
+if not isinstance(release, dict):
+    raise SystemExit("PyPI release metadata is malformed")
 expected = {
-    f"yui_agent_policy-{version}-py3-none-any.whl",
-    f"yui_agent_policy-{version}.tar.gz",
+    f"yui_agent_policy-{version}-py3-none-any.whl": "bdist_wheel",
+    f"yui_agent_policy-{version}.tar.gz": "sdist",
 }
-files = [file_info for file_info in release["urls"] if not file_info.get("yanked", False)]
-by_name = {file_info["filename"]: file_info for file_info in files}
-if len(files) != len(expected) or set(by_name) != expected:
+files = release.get("urls")
+if not isinstance(files, list) or len(files) != len(expected):
+    raise SystemExit("PyPI release does not contain the exact expected artifact set")
+by_name = {}
+for file_info in files:
+    if not isinstance(file_info, dict):
+        raise SystemExit("PyPI release metadata is malformed")
+    filename = file_info.get("filename")
+    url = file_info.get("url")
+    if (
+        not isinstance(filename, str)
+        or filename not in expected
+        or file_info.get("packagetype") != expected[filename]
+        or file_info.get("yanked") is not False
+        or not isinstance(url, str)
+    ):
+        raise SystemExit("PyPI release metadata does not match the expected artifact contract")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "files.pythonhosted.org":
+        raise SystemExit("PyPI release artifact URL is not an expected HTTPS host")
+    if filename in by_name:
+        raise SystemExit("PyPI release metadata contains duplicate artifacts")
+    by_name[filename] = url
+if set(by_name) != set(expected):
     raise SystemExit("PyPI release does not contain the exact expected artifact set")
 for filename in sorted(expected):
-    urllib.request.urlretrieve(by_name[filename]["url"], target / filename)
+    with urllib.request.urlopen(
+        by_name[filename], timeout=request_timeout_seconds
+    ) as response:
+        final_artifact_url = urlparse(response.geturl())
+        if (
+            final_artifact_url.scheme != "https"
+            or final_artifact_url.hostname != "files.pythonhosted.org"
+        ):
+            raise SystemExit("Downloaded artifact URL is not an expected HTTPS host")
+        with (target / filename).open("xb") as destination:
+            shutil.copyfileobj(response, destination)
 PY
-gh attestation verify dist-verify/yui_agent_policy-0.1.9-py3-none-any.whl \
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.9-py3-none-any.whl" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
   --source-ref refs/tags/v0.1.9
-gh attestation verify dist-verify/yui_agent_policy-0.1.9.tar.gz \
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.9.tar.gz" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
   --source-ref refs/tags/v0.1.9
+)
 ```
 
 ## License
