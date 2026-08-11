@@ -6,6 +6,12 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+- Hardened the documented PyPI provenance flow with isolated temporary
+  downloads, bounded requests, exact non-yanked artifact checks,
+  redirect-final HTTPS host validation, exclusive file creation, and cleanup
+  on success or failure. Also clarified the audit-event v1.1 wrapper-validation
+  boundary and added a public issue-data safety reminder.
+
 ## 0.1.9 - 2026-07-18
 
 - Changed both the PyPI publish and GitHub Release post-publish gates to use the
