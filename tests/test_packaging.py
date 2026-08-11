@@ -49,10 +49,17 @@ def test_readme_provenance_download_uses_expected_local_filenames() -> None:
 
     assert f'version = "{version}"' in readme
     assert readme.count(f"--source-ref refs/tags/v{version}") == 2
+    assert "(\nset -euo pipefail\nverify_dir=\"$(mktemp -d" in readme
+    assert "trap 'rm -rf -- \"$verify_dir\"' EXIT" in readme
+    assert 'python - "$verify_dir"' in readme
+    assert f"--source-ref refs/tags/v{version}\n)\n```" in readme
     assert 'target / file_info["filename"]' not in readme
-    assert 'f"yui_agent_policy-{version}-py3-none-any.whl"' in readme
-    assert 'f"yui_agent_policy-{version}.tar.gz"' in readme
-    assert "set(by_name) != expected" in readme
+    assert 'f"yui_agent_policy-{version}-py3-none-any.whl": "bdist_wheel"' in readme
+    assert 'f"yui_agent_policy-{version}.tar.gz": "sdist"' in readme
+    assert "if not isinstance(release, dict):" in readme
+    assert 'file_info.get("yanked") is not False' in readme
+    assert 'parsed.hostname != "files.pythonhosted.org"' in readme
+    assert "set(by_name) != set(expected)" in readme
     assert "target / filename" in readme
 
 

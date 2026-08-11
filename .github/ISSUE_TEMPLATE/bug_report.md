@@ -6,6 +6,8 @@ labels: bug
 assignees: ""
 ---
 
+> Public issue reminder: do not paste credentials, tokens, private keys, private repository identifiers, local paths, raw commands or logs, or other sensitive data.
+
 ## Summary
 
 What happened?
