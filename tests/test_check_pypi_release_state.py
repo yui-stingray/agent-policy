@@ -279,7 +279,7 @@ def test_main_keeps_project_endpoint_for_pre_upload_check(
     monkeypatch.setattr(
         MODULE,
         "load_project_metadata",
-        lambda _path: ("yui-agent-policy", "0.1.9"),
+        lambda _path: ("yui-agent-policy", "0.1.10"),
     )
     monkeypatch.setattr(
         MODULE,
@@ -289,8 +289,8 @@ def test_main_keeps_project_endpoint_for_pre_upload_check(
     monkeypatch.setattr(
         MODULE,
         "fetch_pypi_project",
-        lambda _project: {"info": {"version": "0.1.8"}, "releases": {"0.1.8": []}},
+        lambda _project: {"info": {"version": "0.1.9"}, "releases": {"0.1.9": []}},
     )
 
     assert MODULE.main(["check_pypi_release_state.py"]) == 0
-    assert "candidate=0.1.9" in capsys.readouterr().out
+    assert "candidate=0.1.10" in capsys.readouterr().out
