@@ -158,7 +158,7 @@ def map_command(command: str, _depth: int = 0) -> str:
 
     try:
         stripped = _strip_heredocs(command)
-        tokens = _tokenize(stripped)
+        tokens = _tokenize(_separate_unquoted_newlines(stripped))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
         # unterminated heredoc makes the bounded parser uncertain. A hook
@@ -187,6 +187,38 @@ def _tokenize(command: str) -> list[str]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     return list(lexer)
+
+
+def _separate_unquoted_newlines(command: str) -> str:
+    """Mark executable line boundaries without changing quoted newlines."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        out.append(char)
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            out.append(command[index + 1])
+            index += 2
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        elif char == "\n":
+            # Put the marker after the newline so it is outside a preceding
+            # shell comment. Existing operator tokens still flush harmlessly.
+            out.append(";")
+        index += 1
+    return "".join(out)
 
 
 def _strip_heredocs(command: str) -> str:
@@ -375,8 +407,7 @@ def _find_heredoc_end(
         else:
             line = command[line_start:newline]
             after_line = newline + 1
-        if line.endswith("\r"):
-            line = line[:-1]
+        line = line.removesuffix("\r")
         candidate = line.lstrip("\t") if strip_tabs else line
         if candidate == delimiter:
             if expand_body and _contains_active_heredoc_substitution(
@@ -576,11 +607,18 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
             if (
                 subcommand_index is not None
                 and tokens[subcommand_index] in {"push", "send-pack"}
-                and _has_force_flag(tokens[subcommand_index + 1 :])
             ):
+                push_args = tokens[subcommand_index + 1 :]
+                if _has_force_flag(push_args):
+                    return "push.force"
+                if any("$" in arg for arg in push_args):
+                    return "unknown"
+        if basename == "git-send-pack":
+            send_pack_args = tokens[i + 1 :]
+            if _has_force_flag(send_pack_args):
                 return "push.force"
-        if basename == "git-send-pack" and _has_force_flag(tokens[i + 1 :]):
-            return "push.force"
+            if any("$" in arg for arg in send_pack_args):
+                return "unknown"
         if basename == "gh" and tokens[i + 1 : i + 3] == ["pr", "merge"]:
             return "merge.pr"
     return "shell"
@@ -611,7 +649,7 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
         if _is_shell_short_option_cluster(arg):
             j += 1
             continue
-        if arg.startswith("-") or arg.startswith("+"):
+        if arg.startswith(("-", "+")):
             return "unknown"
         # The first non-option is the script filename, so later ``-c`` text
         # cannot introduce a nested command string. Its contents are outside
@@ -662,7 +700,7 @@ def _env_command_start(args: list[str]) -> int | None:
                 return None
             index += 2
             continue
-        if arg.startswith("--chdir=") or arg.startswith("--unset="):
+        if arg.startswith(("--chdir=", "--unset=")):
             index += 1
             continue
         # ``-S`` needs a second shell-like parse; unknown flags may have
@@ -702,7 +740,15 @@ def _has_force_flag(push_args: list[str]) -> bool:
     ``--force-with-lease=<refname>`` form), ``--mirror``, ``-f``, short-option
     clusters that contain ``f`` (e.g. ``-fu``), and ``+`` force refspecs.
     """
-    for arg in push_args:
+    index = 0
+    while index < len(push_args):
+        arg = push_args[index]
+        if arg in {"-o", "--push-option"}:
+            index += 2
+            continue
+        if arg.startswith(("-o", "--push-option=")):
+            index += 1
+            continue
         if arg in ("--force", "--mirror", "-f"):
             return True
         if arg.startswith("--force-with-lease"):
@@ -723,6 +769,7 @@ def _has_force_flag(push_args: list[str]) -> bool:
             return True
         if len(arg) > 1 and arg.startswith("+"):
             return True
+        index += 1
     return False
 
 

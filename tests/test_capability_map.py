@@ -205,6 +205,9 @@ def test_force_push_is_detected(command: str) -> None:
         ('cmd="git push --force origin main"; bash -c "$cmd"', "unknown"),
         ("runner=bash; $runner -c 'git push --force origin main'", "unknown"),
         ("builtin eval 'git push --force origin main'", "unknown"),
+        ("bash -c 'echo safe'\ngit push --force origin main", "push.force"),
+        ("F=--force; git push $F origin main", "unknown"),
+        ("REF=+HEAD:main; git push origin $REF", "unknown"),
     ],
 )
 def test_force_push_execution_forms_do_not_fall_through_to_shell(
@@ -212,6 +215,19 @@ def test_force_push_execution_forms_do_not_fall_through_to_shell(
     capability: str,
 ) -> None:
     assert map_command(command) == capability
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push -o +ci.skip origin main",
+        "git push -o+ci.skip origin main",
+        "git push --push-option +ci.skip origin main",
+        "git push --push-option=+ci.skip origin main",
+    ],
+)
+def test_push_option_values_are_not_force_refspecs(command: str) -> None:
+    assert map_command(command) == "shell"
 
 
 def test_command_dispatch_before_shell_wrapper_returns_unknown() -> None:

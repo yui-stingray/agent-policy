@@ -385,9 +385,10 @@ shell commands.
   `require_approval`.
 - **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
   not a full shell. It handles quoted literals, heredocs, compound
-  statements, and the common `bash -c '...'` / `eval` wrappers, but
-  exotic forms such as `git --git-dir=/path push --force`, process
-  substitution, or function definitions are not modeled. Clear commands
+  statements, a bounded set of Git global options such as `--git-dir=/path`,
+  and the common `bash -c '...'` / `eval` wrappers. Forms such as
+  `git -c alias.p=push p --force`, process substitution, or function
+  definitions are not modeled. Clear commands
   outside the narrow patterns map to `shell`, while ambiguous, unbalanced,
   or unterminated parsing maps to `unknown` and is rejected by the hooks.
 

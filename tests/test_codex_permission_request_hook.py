@@ -43,6 +43,9 @@ FORCE_PUSH_EXECUTION_FORMS = (
     "git push --force-w origin main",
     "git push --mir origin",
     "git send-pack --force origin HEAD:main",
+    "bash -c 'echo safe'\ngit push --force origin main",
+    "F=--force; git push $F origin main",
+    "REF=+HEAD:main; git push origin $REF",
 )
 VALID_EVALUATOR_DECISION = (
     '{"matched_repo":null,"mode":"auto_allow","reason":"test"}'
@@ -190,7 +193,7 @@ def _unexpected_evaluator_path(tmp_path: Path) -> str:
     python3.write_text(
         f"""#!/usr/bin/env bash
 if [[ "$1" == *"/check.py" ]]; then
-    printf '%s\n' 'not-json'
+    printf '%s\\n' 'not-json'
     exit 0
 fi
 exec "{sys.executable}" "$@"
@@ -253,6 +256,10 @@ def test_deny_returns_fixed_permission_json() -> None:
         "git status --short",
         'bash -c \'printf "%s\\n" "$HOME"\'',
         "builtin printf '%s\\n' ok",
+        "git push -o +ci.skip origin main",
+        "git push -o+ci.skip origin main",
+        "git push --push-option +ci.skip origin main",
+        "git push --push-option=+ci.skip origin main",
     ),
 )
 def test_auto_allow_returns_fixed_permission_json(
