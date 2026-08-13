@@ -1,19 +1,8 @@
-"""Where: tests/test_codex_hook.py
-What: subprocess-driven contract tests for examples/codex_hook.sh.
-Why: this Codex hook is a shell guardrail pilot — it only handles Bash
-     PreToolUse events even though Codex hooks can also match other tools.
-     These tests pin the capability mapping (push.force / merge.pr / shell)
-     and exit-code translation so drift between check.py and the hook is
-     caught by CI, not by a user in production.
-
-The Codex hook payload differs from Claude Code's: it always has
-tool_name="Bash" and includes turn_id/tool_use_id. The tests send
-realistic payloads to verify the hook ignores extra fields and routes
-solely on tool_input.command.
-"""
+"""Subprocess contract tests for the fail-closed Codex PreToolUse hook."""
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -25,42 +14,94 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK_SH = REPO_ROOT / "examples" / "codex_hook.sh"
 POLICY_TOML = REPO_ROOT / "examples" / "policy.toml"
+BASH = shutil.which("bash")
+JQ = shutil.which("jq")
 
-# Hook contract exit codes — keep in sync with examples/codex_hook.sh.
 HOOK_ALLOW = 0
 HOOK_BLOCK = 2
-HOOK_ERROR = 1
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("bash") is None or shutil.which("jq") is None,
-    reason="codex_hook.sh requires bash and jq on PATH",
+BLOCK_MESSAGE = "agent-policy hook: blocked\n"
+FORCE_PUSH_EXECUTION_FORMS = (
+    "bash -lc \"git push --force origin main\"",
+    "env bash -c \"git push --force origin main\"",
+    "command bash -c \"git push --force origin main\"",
+    "cat <(bash -c \"git push --force origin main\")",
+    "git -C /tmp push --force origin main",
+    "git -c alias.p=push p --force origin main",
+    "git --config-env=alias.p=GIT_ALIAS p --force origin main",
+    "git push origin +HEAD:main",
+    "git push --mirror origin",
+    "bash <<'EOF'\ngit push --force origin main\nEOF",
+    "bash <<< 'git push --force origin main'",
+    'cmd="git push --force origin main"; bash -c "$cmd"',
+    "runner=bash; $runner -c 'git push --force origin main'",
+    "builtin eval 'git push --force origin main'",
+    "git push --force-w origin main",
+    "git push --mir origin",
+    "git send-pack --force origin HEAD:main",
+)
+VALID_EVALUATOR_DECISION = (
+    '{"matched_repo":null,"mode":"auto_allow","reason":"test"}'
 )
 
+pytestmark = pytest.mark.skipif(BASH is None, reason="codex_hook.sh requires bash")
 
-def _codex_payload(command: str) -> str:
+
+def _codex_payload(command: str, **extra: object) -> str:
     """Build a minimal but realistic Codex PreToolUse JSON payload."""
-    import json
-    return json.dumps({
+    payload: dict[str, object] = {
         "turn_id": "turn_test_001",
         "tool_name": "Bash",
         "tool_use_id": "tu_test_001",
         "tool_input": {"command": command},
-    })
+    }
+    payload.update(extra)
+    return json.dumps(payload)
 
 
-def _run_hook(payload: str, *, repo: str = "acme/app",
-              ownership: str | None = "internal") -> subprocess.CompletedProcess[str]:
+def _run_hook(
+    payload: str,
+    *,
+    policy: Path | None = POLICY_TOML,
+    repo: str | None = "acme/app",
+    ownership: str | None = "internal",
+    first_write: str | None = None,
+    path: str | None = None,
+    xtrace: bool = False,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
-    env["AGENT_POLICY_FILE"] = str(POLICY_TOML)
-    env["AGENT_POLICY_REPO"] = repo
-    if ownership is not None:
-        env["AGENT_POLICY_OWNERSHIP"] = ownership
+    # BASH_ENV executes before a hook script, so tests isolate that trusted
+    # launcher boundary and explicitly opt in to inherited xtrace below.
+    env.pop("BASH_ENV", None)
+    if path is None:
+        if JQ is None:
+            pytest.skip("normal hook paths require jq on PATH")
+        env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env.get('PATH', '')}"
     else:
-        env.pop("AGENT_POLICY_OWNERSHIP", None)
+        env["PATH"] = path
 
+    if policy is None:
+        env.pop("AGENT_POLICY_FILE", None)
+    else:
+        env["AGENT_POLICY_FILE"] = str(policy)
+    if repo is None:
+        env.pop("AGENT_POLICY_REPO", None)
+    else:
+        env["AGENT_POLICY_REPO"] = repo
+    if ownership is None:
+        env.pop("AGENT_POLICY_OWNERSHIP", None)
+    else:
+        env["AGENT_POLICY_OWNERSHIP"] = ownership
+    if first_write is None:
+        env.pop("AGENT_POLICY_FIRST_WRITE", None)
+    else:
+        env["AGENT_POLICY_FIRST_WRITE"] = first_write
+    if xtrace:
+        env["SHELLOPTS"] = "xtrace"
+        env.pop("BASH_XTRACEFD", None)
+
+    assert BASH is not None
     return subprocess.run(
-        ["bash", str(HOOK_SH)],
+        [BASH, str(HOOK_SH)],
         input=payload,
         capture_output=True,
         text=True,
@@ -69,130 +110,355 @@ def _run_hook(payload: str, *, repo: str = "acme/app",
     )
 
 
-# ---------------------------------------------------------------------------
-# Capability mapping: command → check.py capability
-# ---------------------------------------------------------------------------
+def _external_auto_allow_policy(tmp_path: Path) -> Path:
+    policy = tmp_path / "external-auto-allow.toml"
+    policy.write_text(
+        """
+default_mode = "require_approval"
 
+[[repo_policy]]
+repo = "someone-else/their-repo"
+ownership_class = "external"
 
-def test_plain_shell_blocks_via_shell_capability() -> None:
-    result = _run_hook(_codex_payload("ls -la"))
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=shell" in result.stderr
-
-
-def test_force_push_blocks_via_push_force() -> None:
-    result = _run_hook(_codex_payload("git push --force origin master"))
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=push.force" in result.stderr
-    assert "DENY" in result.stderr
-
-
-def test_force_with_lease_routes_to_push_force() -> None:
-    result = _run_hook(_codex_payload("git push --force-with-lease origin master"))
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=push.force" in result.stderr
-
-
-def test_gh_pr_merge_routes_to_merge_pr() -> None:
-    result = _run_hook(_codex_payload("gh pr merge 42 --merge"))
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=merge.pr" in result.stderr
-
-
-# ---------------------------------------------------------------------------
-# Regression: quoted-literal false positives (v0.1.2 fix)
-# ---------------------------------------------------------------------------
-#
-# The previous substring matcher classified commands like
-# ``printf '%s\n' 'git push --force origin master'`` as push.force
-# because the forbidden substring was visible in the raw command
-# string. The shlex-based helper (examples/capability_map.py) now
-# tokenizes first, so quoted literals stay opaque.
-#
-# We assert these commands route to the plain ``shell`` capability
-# (which examples/policy.toml still blocks with require_approval) —
-# the distinction is that the blocked reason is ``capability=shell``
-# and NOT ``capability=push.force``. A regression here would mean
-# the old false positive crept back.
-
-
-def test_printf_with_quoted_force_push_is_not_push_force() -> None:
-    result = _run_hook(
-        _codex_payload("printf '%s\\n' 'git push --force origin master'")
+[repo_policy.capabilities]
+shell = "auto_allow"
+""".lstrip(),
+        encoding="utf-8",
     )
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=shell" in result.stderr
-    assert "capability=push.force" not in result.stderr
+    return policy
 
 
-def test_echo_with_quoted_force_push_is_not_push_force() -> None:
-    result = _run_hook(_codex_payload("echo 'git push --force'"))
-    assert result.returncode == HOOK_BLOCK
-    assert "capability=shell" in result.stderr
-    assert "capability=push.force" not in result.stderr
+def _default_auto_allow_policy(tmp_path: Path) -> Path:
+    policy = tmp_path / "default-auto-allow.toml"
+    policy.write_text('default_mode = "auto_allow"\n', encoding="utf-8")
+    return policy
 
 
-def test_heredoc_containing_force_push_is_not_push_force() -> None:
-    result = _run_hook(
-        _codex_payload("cat <<EOF\ngit push --force\nEOF")
+def _unexpected_classifier_path(tmp_path: Path) -> str:
+    if JQ is None:
+        pytest.skip("unexpected-classifier test requires jq")
+    python3 = tmp_path / "python3"
+    python3.write_text(
+        f"""#!/usr/bin/env bash
+if [[ "$1" == *"/capability_map.py" ]]; then
+    printf '%s\\n' 'unexpected.capability'
+    exit 0
+fi
+exec "{sys.executable}" "$@"
+""",
+        encoding="utf-8",
     )
+    python3.chmod(0o755)
+    return (
+        f"{tmp_path}{os.pathsep}{Path(sys.executable).parent}"
+        f"{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+
+
+def _malformed_evaluator_path(tmp_path: Path) -> str:
+    if JQ is None:
+        pytest.skip("malformed-evaluator test requires jq")
+    python3 = tmp_path / "python3"
+    python3.write_text(
+        f"""#!/usr/bin/env bash
+if [[ "$1" == *"/check.py" ]]; then
+    printf '%s\\n' '{{"mode":"auto_allow"}}'
+    exit 0
+fi
+exec "{sys.executable}" "$@"
+""",
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
+    return (
+        f"{tmp_path}{os.pathsep}{Path(sys.executable).parent}"
+        f"{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+
+
+def _unexpected_evaluator_path(tmp_path: Path) -> str:
+    if JQ is None:
+        pytest.skip("unexpected-evaluator test requires jq")
+    python3 = tmp_path / "python3"
+    python3.write_text(
+        f"""#!/usr/bin/env bash
+if [[ "$1" == *"/check.py" ]]; then
+    printf '%s\n' 'not-json'
+    exit 0
+fi
+exec "{sys.executable}" "$@"
+""",
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
+    return (
+        f"{tmp_path}{os.pathsep}{Path(sys.executable).parent}"
+        f"{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+
+
+def _evaluator_output_path(tmp_path: Path, output: str) -> str:
+    if JQ is None:
+        pytest.skip("evaluator-output test requires jq")
+    python3 = tmp_path / "python3"
+    python3.write_text(
+        f"""#!{sys.executable}
+import os
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1].endswith("/check.py"):
+    sys.stdout.write({output!r})
+    raise SystemExit(0)
+os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
+""",
+        encoding="utf-8",
+    )
+    python3.chmod(0o755)
+    return (
+        f"{tmp_path}{os.pathsep}{Path(sys.executable).parent}"
+        f"{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+
+
+def test_policy_block_has_fixed_sanitized_stderr() -> None:
+    result = _run_hook(_codex_payload("git push --force origin main"))
+
     assert result.returncode == HOOK_BLOCK
-    assert "capability=shell" in result.stderr
-    assert "capability=push.force" not in result.stderr
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
 
 
-def test_bash_c_force_push_is_still_detected() -> None:
-    """Recursive classification must still catch wrapper patterns."""
-    result = _run_hook(_codex_payload("bash -c 'git push --force origin main'"))
+@pytest.mark.parametrize(
+    "command",
+    (
+        "git status --short",
+        'bash -c \'printf "%s\\n" "$HOME"\'',
+        "builtin printf '%s\\n' ok",
+    ),
+)
+def test_auto_allow_is_silent(command: str, tmp_path: Path) -> None:
+    policy = tmp_path / "auto-allow.toml"
+    policy.write_text(
+        """
+default_mode = "require_approval"
+
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+shell = "auto_allow"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = _run_hook(_codex_payload(command), policy=policy)
+
+    assert result.returncode == HOOK_ALLOW
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("command", FORCE_PUSH_EXECUTION_FORMS)
+def test_force_push_execution_forms_never_auto_allow(command: str, tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload(command),
+        policy=_default_auto_allow_policy(tmp_path),
+    )
+
     assert result.returncode == HOOK_BLOCK
-    assert "capability=push.force" in result.stderr
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
 
 
-def test_sudo_force_push_is_still_detected() -> None:
-    """Scan-anywhere must still catch sudo-wrapped force push."""
-    result = _run_hook(_codex_payload("sudo git push --force origin main"))
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "",
+        " \t\n",
+        "[]",
+        _codex_payload("git status --short")
+        + "\n"
+        + _codex_payload("git status --short"),
+    ],
+)
+def test_pretooluse_requires_exactly_one_json_object(
+    payload: str,
+    tmp_path: Path,
+) -> None:
+    result = _run_hook(payload, policy=_default_auto_allow_policy(tmp_path))
+
     assert result.returncode == HOOK_BLOCK
-    assert "capability=push.force" in result.stderr
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
 
 
-def test_shell_auto_allow_is_silent_on_permissive_policy() -> None:
-    """When shell=auto_allow in policy, the hook must exit 0 with no stderr."""
-    # Use a repo/capability that resolves to auto_allow (read on acme/app).
-    # Since this wrapper only handles Bash, we simulate by directly testing
-    # the exit path: a safe command on a repo where shell is auto_allow
-    # would need a policy entry for it. Instead, we test that the hook
-    # stays silent on auto_allow by using a write-capable command on a
-    # repo where the default auto_allows it — not possible with the
-    # current examples/policy.toml (shell is require_approval on acme/app).
-    #
-    # This test verifies the error path instead: auto_allow is exercised
-    # in test_claude_code_hook.py via Read/Write tools. For the Codex
-    # hook, the shell capability is always the gating factor.
-    pass
+def test_inherited_xtrace_does_not_leak_protected_values(tmp_path: Path) -> None:
+    marker = "synthetic-xtrace-marker"
+    policy = tmp_path / f"{marker}-policy.toml"
+    policy.write_text('default_mode = "auto_allow"\n', encoding="utf-8")
+
+    result = _run_hook(
+        _codex_payload(f"printf %s {marker}-command"),
+        policy=policy,
+        repo=f"{marker}-repo",
+        xtrace=True,
+    )
+
+    assert result.returncode == HOOK_ALLOW
+    assert result.stdout == ""
+    assert "set +x" in result.stderr
+    assert marker not in result.stderr
 
 
-# ---------------------------------------------------------------------------
-# Error paths
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("payload", "policy", "repo"),
+    [
+        ("{not-json", POLICY_TOML, "acme/app"),
+        (_codex_payload("ls -la"), None, "acme/app"),
+        (_codex_payload("ls -la"), POLICY_TOML, None),
+        (_codex_payload("ls -la"), Path("/untrusted/config/policy.toml"), "acme/app"),
+    ],
+)
+def test_payload_and_config_errors_block_without_leaking_details(
+    payload: str,
+    policy: Path | None,
+    repo: str | None,
+) -> None:
+    result = _run_hook(payload, policy=policy, repo=repo)
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+    assert "untrusted" not in result.stderr
+    assert "not-json" not in result.stderr
 
 
-def test_missing_command_is_hook_error() -> None:
-    result = _run_hook('{"tool_name":"Bash","tool_input":{}}')
-    assert result.returncode == HOOK_ERROR
-    assert "missing tool_input.command" in result.stderr
+def test_missing_jq_blocks_with_the_same_sanitized_message(tmp_path: Path) -> None:
+    result = _run_hook(_codex_payload("ls -la"), path=str(tmp_path))
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
 
 
-def test_empty_payload_is_hook_error() -> None:
-    result = _run_hook("{}")
-    assert result.returncode == HOOK_ERROR
-    assert "missing tool_input.command" in result.stderr
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'unterminated",
+        "cat <<EOF\ngit push --force origin main",
+    ],
+)
+def test_unknown_classifier_result_blocks(command: str) -> None:
+    result = _run_hook(_codex_payload(command))
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
 
 
-def test_hook_comments_do_not_restate_stale_codex_limitations() -> None:
+def test_unexpected_classifier_result_blocks(tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload("git status --short"),
+        path=_unexpected_classifier_path(tmp_path),
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+
+
+def test_malformed_evaluator_response_blocks(tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload("git status --short"),
+        path=_malformed_evaluator_path(tmp_path),
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+
+
+def test_unexpected_evaluator_result_blocks(tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload("git status --short"),
+        path=_unexpected_evaluator_path(tmp_path),
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        f"{VALID_EVALUATOR_DECISION}\n{VALID_EVALUATOR_DECISION}\n",
+        '{"ignored":"leading"}\n' + VALID_EVALUATOR_DECISION + "\n",
+    ],
+)
+def test_evaluator_requires_exactly_one_json_object(
+    output: str,
+    tmp_path: Path,
+) -> None:
+    result = _run_hook(
+        _codex_payload("git status --short"),
+        path=_evaluator_output_path(tmp_path, output),
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+
+
+@pytest.mark.parametrize(
+    ("first_write", "expected_code"),
+    [
+        ("true", HOOK_BLOCK),
+        ("false", HOOK_ALLOW),
+        (None, HOOK_BLOCK),
+        ("malformed", HOOK_BLOCK),
+    ],
+)
+def test_external_auto_allow_requires_wrapper_owned_first_write_state(
+    tmp_path: Path,
+    first_write: str | None,
+    expected_code: int,
+) -> None:
+    result = _run_hook(
+        _codex_payload("git status --short"),
+        policy=_external_auto_allow_policy(tmp_path),
+        repo="someone-else/their-repo",
+        ownership="external",
+        first_write=first_write,
+    )
+
+    assert result.returncode == expected_code
+    assert result.stdout == ""
+    assert result.stderr == ("" if expected_code == HOOK_ALLOW else BLOCK_MESSAGE)
+
+
+def test_external_first_write_comes_from_environment_not_payload(tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload(
+            "git status --short",
+            ownership_class="internal",
+            first_write_to_repo=False,
+        ),
+        policy=_external_auto_allow_policy(tmp_path),
+        repo="someone-else/their-repo",
+        ownership="external",
+        first_write="true",
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+
+
+def test_hook_comments_describe_current_codex_contract() -> None:
     hook = HOOK_SH.read_text(encoding="utf-8")
 
     assert "features.codex_hooks" not in hook
     assert "features.hooks" in hook
-    assert "Codex hooks only intercept Bash" not in hook
     assert "This wrapper only maps Bash commands" in hook
-    assert "Codex hooks can also match apply_patch and MCP tools" in hook

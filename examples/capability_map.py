@@ -14,8 +14,10 @@ Why: Earlier versions of the bash hooks used raw substring matching on
      to the case statement, even though the quoted literal is never
      executed. This helper avoids that by:
 
-         1. Stripping heredoc bodies so ``cat <<EOF ... git push
-            --force ... EOF`` is not scanned as commands.
+         1. Stripping bodies only for definite, unquoted heredoc
+            operators, so ``cat <<EOF ... git push --force ... EOF``
+            is not scanned as commands while ``echo '<<EOF'`` remains
+            literal data.
          2. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
             operators like ``;``, ``&&``, ``||``, ``|``, ``&`` become
             their own tokens and quoted arguments collapse into single
@@ -34,16 +36,26 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             '...'``, so dropping into a nested shell does not hide a
             ``push.force`` from the hook.
 
+         6. Returning ``unknown`` for malformed, ambiguous, incomplete, or
+            unmodeled execution syntax. Hooks must reject ``unknown`` rather
+            than passing it to policy fallback.
+
+         7. Returning ``unknown`` for active command substitution. The
+            bounded parser does not attempt to interpret embedded backtick
+            or ``$()`` commands; single-quoted and escaped forms remain
+            literal data.
+
 How to use: the bash hooks invoke
 ``python3 capability_map.py "<command>"`` and read the capability name
 from stdout. ``main`` also accepts the command on stdin when no argv
 is given, which is convenient for piping from ``jq``.
 
-Scope: this is deliberately narrow. Full shell semantics (command
-substitution, process substitution, ``$(...)``, background jobs,
-function definitions) are not modeled. The fail-closed default is
-``shell``, which policy.toml can still flag as ``require_approval`` or
-``deny``, so falling through is safe.
+Scope: this is deliberately narrow. Full shell semantics (background jobs,
+function definitions) are not modeled. Active command and process
+substitution are rejected as ``unknown`` rather than parsed. Clear commands
+outside the narrow patterns fall back to ``shell``. Syntax the helper cannot
+parse confidently returns ``unknown`` so a wrapper can fail closed before
+policy evaluation.
 
 This module is stdlib-only so it does not depend on ``agent_policy``
 and can be exercised by unit tests without the package install.
@@ -52,7 +64,6 @@ and can be exercised by unit tests without the package install.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import sys
 
@@ -71,17 +82,56 @@ _SHELL_WRAPPERS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 # this mirrors fail-closed semantics for the wrapper.
 _STRICTNESS = {"shell": 0, "merge.pr": 1, "push.force": 2}
 
-# Heredoc header: ``<<WORD``, ``<<-WORD``, ``<<'WORD'``, ``<<"WORD"``.
-# The delimiter must be a plain identifier — we do not try to handle
-# quoted-variable delimiters because they are vanishingly rare in
-# agent-generated commands.
-_HEREDOC_HEADER = re.compile(
-    r"""<<-?\s*['"`]?([A-Za-z_][A-Za-z0-9_]*)['"`]?"""
-)
-
 # Cap recursion for shell wrappers so a pathological nesting cannot
 # drive this helper into unbounded work.
 _MAX_RECURSION = 4
+
+# Bounded subset of Git's global options that precede the subcommand. Unknown
+# options produce ``unknown`` rather than risking a force-push bypass.
+_GIT_GLOBAL_OPTIONS_WITH_VALUE = frozenset(
+    {
+        "-C",
+        "--git-dir",
+        "--namespace",
+        "--super-prefix",
+        "--work-tree",
+    }
+)
+# ``-c`` and ``--config-env`` can define aliases that replace the apparent
+# subcommand (for example, aliasing ``p`` to ``push``). They deliberately stay
+# outside the allowlist so the generic unknown-option branch fails closed.
+_GIT_GLOBAL_OPTIONS_WITHOUT_VALUE = frozenset(
+    {
+        "-p",
+        "-P",
+        "--bare",
+        "--glob-pathspecs",
+        "--icase-pathspecs",
+        "--literal-pathspecs",
+        "--no-pager",
+        "--no-replace-objects",
+        "--noglob-pathspecs",
+        "--paginate",
+    }
+)
+_GIT_GLOBAL_OPTIONS_WITH_ATTACHED_VALUE = tuple(
+    f"{option}="
+    for option in _GIT_GLOBAL_OPTIONS_WITH_VALUE
+    if option.startswith("--")
+)
+_GIT_SUBCOMMAND_UNKNOWN = -1
+
+# Bash short options that do not consume another argv element. Keeping this
+# bounded lets us recognize ``bash -lc <command>`` without guessing about
+# unknown option syntax.
+_SHELL_SHORT_OPTIONS_WITHOUT_ARGUMENT = frozenset(
+    "abcefhiklmnptuvxBCEHPT"
+)
+_SHELL_OPTIONS_WITH_VALUE = frozenset({"-o", "-O", "--init-file", "--rcfile"})
+
+
+class _CommandParseError(ValueError):
+    """The bounded shell parser cannot determine a safe classification."""
 
 
 def map_command(command: str, _depth: int = 0) -> str:
@@ -99,19 +149,22 @@ def map_command(command: str, _depth: int = 0) -> str:
     Returns
     -------
     str
-        One of ``"push.force"``, ``"merge.pr"``, ``"shell"``.
+        One of ``"push.force"``, ``"merge.pr"``, ``"shell"``, or
+        ``"unknown"``. Hooks must block ``"unknown"`` rather than pass it
+        to policy evaluation.
     """
     if _depth > _MAX_RECURSION:
-        return "shell"
-
-    stripped = _strip_heredocs(command)
+        return "unknown"
 
     try:
+        stripped = _strip_heredocs(command)
         tokens = _tokenize(stripped)
     except ValueError:
-        # Unbalanced quotes — safest non-escalating bucket. Policy can
-        # still flag ``shell`` as require_approval or deny.
-        return "shell"
+        # An unbalanced quote, unsupported/ambiguous heredoc header, or
+        # unterminated heredoc makes the bounded parser uncertain. A hook
+        # must block this dedicated result; treating it as policy-controlled
+        # ``shell`` could permit malformed input under auto_allow.
+        return "unknown"
 
     strictest = "shell"
     current: list[str] = []
@@ -119,9 +172,10 @@ def map_command(command: str, _depth: int = 0) -> str:
     for token in (*tokens, ";"):
         if token in _SEPARATORS:
             if current:
-                strictest = _stricter(
-                    strictest, _classify_statement(current, _depth)
-                )
+                classified = _classify_statement(current, _depth)
+                if classified == "unknown":
+                    return "unknown"
+                strictest = _stricter(strictest, classified)
                 current = []
             continue
         current.append(token)
@@ -136,47 +190,329 @@ def _tokenize(command: str) -> list[str]:
 
 
 def _strip_heredocs(command: str) -> str:
-    """Remove heredoc bodies so their contents are not scanned.
+    """Remove heredoc bodies from normal command-statement scanning.
 
     Handles the common forms ``<<WORD``, ``<<-WORD``, ``<<'WORD'``,
-    ``<<"WORD"``. The body — from the newline after the header to the
-    closing delimiter on its own line — is elided. An unterminated
-    heredoc elides to the end of the string, which is the safest
-    direction for a fail-closed gate (nothing beyond the header can
-    be used to escalate capability).
+    ``<<"WORD"`` only when the operator is outside shell quotes. The body
+    — from the newline after the header to the closing delimiter on its own
+    line — is elided. Expanding bodies are checked only for active command
+    substitution. Ambiguous, unbalanced, or unterminated input raises so
+    ``map_command()`` can return the dedicated ``unknown`` classification.
     """
     out: list[str] = []
+    retained_start = 0
     pos = 0
-    while True:
-        match = _HEREDOC_HEADER.search(command, pos)
-        if match is None:
-            out.append(command[pos:])
-            return "".join(out)
-        out.append(command[pos : match.end()])
-        delimiter = match.group(1)
+    quote: str | None = None
+    arithmetic_depth = 0
 
-        # The body starts at the next newline after the header.
-        newline = command.find("\n", match.end())
-        if newline < 0:
-            # Header with no following newline — nothing to strip.
-            pos = match.end()
+    while pos < len(command):
+        char = command[pos]
+        if quote is not None:
+            if quote == "'":
+                if char == quote:
+                    quote = None
+                pos += 1
+                continue
+            if char == "\\":
+                if pos + 1 >= len(command):
+                    raise _CommandParseError("unterminated escape")
+                pos += 2
+                continue
+            if char == quote:
+                quote = None
+                pos += 1
+                continue
+            if _starts_command_substitution(command, pos):
+                raise _CommandParseError("active command substitution")
+            pos += 1
             continue
-        body_start = newline + 1
 
-        # Find the closing delimiter on its own (possibly indented) line.
-        lines = command[body_start:].split("\n")
-        end_line = None
-        for i, line in enumerate(lines):
-            if line.strip() == delimiter:
-                end_line = i
+        if char == "\\":
+            if pos + 1 >= len(command):
+                raise _CommandParseError("unterminated escape")
+            pos += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            pos += 1
+            continue
+        if char == "#" and _starts_comment(command, pos):
+            newline = command.find("\n", pos)
+            if newline < 0:
                 break
-        if end_line is None:
-            # Unterminated — drop everything from body_start on.
-            return "".join(out)
-        # Advance past the closing delimiter line (the +1 covers the
-        # newline that ``split`` consumed).
-        consumed = sum(len(lines[i]) + 1 for i in range(end_line + 1))
-        pos = body_start + consumed
+            pos = newline + 1
+            continue
+        if _starts_command_substitution(command, pos):
+            raise _CommandParseError("active command substitution")
+        if _starts_process_substitution(command, pos):
+            raise _CommandParseError("active process substitution")
+        if command.startswith("((", pos):
+            arithmetic_depth += 1
+            pos += 2
+            continue
+        if arithmetic_depth and command.startswith("))", pos):
+            arithmetic_depth -= 1
+            pos += 2
+            continue
+        if arithmetic_depth and command.startswith("<<", pos):
+            # ``<<`` is an arithmetic left shift inside ``(( ... ))``, not
+            # a heredoc operator.
+            pos += 2
+            continue
+        if command.startswith("<<<", pos):
+            # A here-string is not a heredoc operator. Leave it intact.
+            pos += 3
+            continue
+        if not command.startswith("<<", pos):
+            pos += 1
+            continue
+
+        header = _parse_heredoc_header(command, pos)
+        if header is None:
+            pos += 2
+            continue
+        header_end, delimiter, strip_tabs, expand_body = header
+        newline = command.find("\n", header_end)
+        if newline < 0:
+            raise _CommandParseError("unterminated heredoc header")
+        if _contains_unquoted_heredoc_operator(command, header_end, newline):
+            raise _CommandParseError("multiple heredocs are unsupported")
+
+        body_start = newline + 1
+        body_end = _find_heredoc_end(
+            command,
+            body_start,
+            delimiter,
+            strip_tabs=strip_tabs,
+            expand_body=expand_body,
+        )
+        # Keep the header and line ending so subsequent commands cannot be
+        # merged into the header's final token.
+        out.append(command[retained_start:body_start])
+        retained_start = body_end
+        pos = body_end
+
+    if quote is not None:
+        raise _CommandParseError("unterminated quote")
+    if arithmetic_depth:
+        raise _CommandParseError("unterminated arithmetic expression")
+    out.append(command[retained_start:])
+    return "".join(out)
+
+
+def _parse_heredoc_header(
+    command: str,
+    operator_start: int,
+) -> tuple[int, str, bool, bool] | None:
+    """Parse one unquoted simple heredoc header after the operator.
+
+    None means the text is a here-string, not a heredoc. Other syntax the
+    bounded parser cannot represent raises instead of guessing whether
+    following lines are command text or heredoc data.
+    """
+    pos = operator_start + 2
+    if pos < len(command) and command[pos] == "<":
+        return None
+
+    strip_tabs = False
+    if pos < len(command) and command[pos] == "-":
+        strip_tabs = True
+        pos += 1
+    while pos < len(command) and command[pos] in " \t":
+        pos += 1
+    if pos >= len(command) or command[pos] in "\r\n":
+        raise _CommandParseError("missing heredoc delimiter")
+
+    expand_body = command[pos] not in {"'", '"'}
+    if not expand_body:
+        quote = command[pos]
+        pos += 1
+        delimiter_start = pos
+        while pos < len(command) and command[pos] != quote:
+            if command[pos] == "\\" and quote == '"':
+                if pos + 1 >= len(command):
+                    raise _CommandParseError("unterminated heredoc delimiter")
+                pos += 2
+                continue
+            pos += 1
+        if pos >= len(command):
+            raise _CommandParseError("unterminated heredoc delimiter")
+        delimiter = command[delimiter_start:pos]
+        pos += 1
+    else:
+        delimiter_start = pos
+        if not (command[pos].isalpha() or command[pos] == "_"):
+            raise _CommandParseError("unsupported heredoc delimiter")
+        pos += 1
+        while pos < len(command) and (
+            command[pos].isalnum() or command[pos] == "_"
+        ):
+            pos += 1
+        delimiter = command[delimiter_start:pos]
+
+    if not delimiter:
+        raise _CommandParseError("empty heredoc delimiter")
+    if pos < len(command) and not _is_heredoc_boundary(command[pos]):
+        raise _CommandParseError("ambiguous heredoc delimiter")
+    return pos, delimiter, strip_tabs, expand_body
+
+
+def _find_heredoc_end(
+    command: str,
+    body_start: int,
+    delimiter: str,
+    *,
+    strip_tabs: bool,
+    expand_body: bool,
+) -> int:
+    """Return the offset after a matching heredoc delimiter line."""
+    line_start = body_start
+    while True:
+        newline = command.find("\n", line_start)
+        if newline < 0:
+            line = command[line_start:]
+            after_line = len(command)
+        else:
+            line = command[line_start:newline]
+            after_line = newline + 1
+        if line.endswith("\r"):
+            line = line[:-1]
+        candidate = line.lstrip("\t") if strip_tabs else line
+        if candidate == delimiter:
+            if expand_body and _contains_active_heredoc_substitution(
+                command[body_start:line_start]
+            ):
+                raise _CommandParseError(
+                    "active command substitution in heredoc"
+                )
+            return after_line
+        if newline < 0:
+            raise _CommandParseError("unterminated heredoc")
+        line_start = after_line
+
+
+def _contains_unquoted_heredoc_operator(
+    command: str,
+    start: int,
+    end: int,
+) -> bool:
+    """Whether one header line contains another unquoted heredoc operator."""
+    quote: str | None = None
+    pos = start
+    while pos < end:
+        char = command[pos]
+        if quote is not None:
+            if quote == "'":
+                if char == quote:
+                    quote = None
+                pos += 1
+                continue
+            if char == "\\":
+                pos += 2
+                continue
+            if char == quote:
+                quote = None
+                pos += 1
+                continue
+            if _starts_command_substitution(command, pos):
+                raise _CommandParseError("active command substitution")
+            pos += 1
+            continue
+        if char == "\\":
+            pos += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            pos += 1
+            continue
+        if char == "#" and _starts_comment(command, pos):
+            return False
+        if _starts_command_substitution(command, pos):
+            raise _CommandParseError("active command substitution")
+        if _starts_process_substitution(command, pos):
+            raise _CommandParseError("active process substitution")
+        if command.startswith("<<", pos) and not command.startswith("<<<", pos):
+            return True
+        pos += 1
+    if quote is not None:
+        raise _CommandParseError("unterminated quote in heredoc header")
+    return False
+
+
+def _starts_command_substitution(command: str, index: int) -> bool:
+    """Return whether an active backtick or ``$()`` starts at ``index``.
+
+    Arithmetic expansion starts with ``$((`` and is not command
+    substitution. Shell line continuations between ``$`` and ``(`` are
+    ignored just as Bash ignores them. The surrounding scanners handle shell
+    quote and other escape state before calling this helper.
+    """
+    if command[index] == "\x60":
+        return True
+    if command[index] != "$":
+        return False
+
+    open_paren = _skip_line_continuations(command, index + 1)
+    if open_paren >= len(command) or command[open_paren] != "(":
+        return False
+    second_char = _skip_line_continuations(command, open_paren + 1)
+    return second_char >= len(command) or command[second_char] != "("
+
+
+def _starts_process_substitution(command: str, index: int) -> bool:
+    """Return whether an active process substitution starts at ``index``.
+
+    Process substitutions execute their bodies, but their nested shell syntax
+    is outside this helper's bounded model. Callers fail closed on the
+    resulting ``unknown`` classification.
+    """
+    return command.startswith("<(", index) or command.startswith(">(", index)
+
+
+def _skip_line_continuations(command: str, index: int) -> int:
+    """Return the first index after consecutive Bash line continuations."""
+    while True:
+        if command.startswith("\\\r\n", index):
+            index += 3
+        elif command.startswith("\\\n", index):
+            index += 2
+        else:
+            return index
+
+
+def _contains_active_heredoc_substitution(line: str) -> bool:
+    """Return whether an expanding heredoc line runs command substitution.
+
+    Quote characters are literal inside a heredoc body. Backslash can quote
+    ``\\``, ``$``, and backtick when the delimiter itself was unquoted.
+    """
+    pos = 0
+    while pos < len(line):
+        if (
+            line[pos] == "\\"
+            and pos + 1 < len(line)
+            and line[pos + 1] in {"\\", "$", "\x60"}
+        ):
+            pos += 2
+            continue
+        if _starts_command_substitution(line, pos):
+            return True
+        pos += 1
+    return False
+
+
+def _starts_comment(command: str, index: int) -> bool:
+    """Return whether an unquoted # starts a shell comment here."""
+    return (
+        index == 0
+        or command[index - 1].isspace()
+        or command[index - 1] in ";|&()"
+    )
+
+
+def _is_heredoc_boundary(char: str) -> bool:
+    """True when a simple delimiter word ends before char."""
+    return char.isspace() or char in ";|&()<>"
 
 
 def _classify_statement(tokens: list[str], depth: int) -> str:
@@ -194,14 +530,32 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     # relied on them being visible in the raw string. We recover the
     # equivalent coverage by tokenizing and recursing.
     head_basename = os.path.basename(tokens[0])
+    if "$" in tokens[0]:
+        # A parameter-expanded command name can resolve to an interpreter or
+        # Git executable after classification.
+        return "unknown"
+    if head_basename == "builtin":
+        # ``printf`` only formats its remaining arguments; it cannot dispatch
+        # another command. Other builtin targets (notably ``eval``, ``source``,
+        # and ``exec``) remain outside this bounded model and fail closed.
+        if len(tokens) >= 2 and tokens[1] == "printf":
+            return "shell"
+        return "unknown"
+    if head_basename == "command":
+        # ``command`` changes executable resolution and its bounded option
+        # forms are not modeled. Failing closed prevents it from hiding a
+        # nested shell wrapper from the force-push guardrail.
+        return "unknown"
     if head_basename in _SHELL_WRAPPERS:
-        nested = _classify_wrapper_c(tokens[1:], depth)
-        if nested != "shell":
-            return nested
+        return _classify_wrapper_c(tokens[1:], depth)
+    if head_basename == "env":
+        return _classify_env(tokens[1:], depth)
     if head_basename == "eval":
         # ``eval arg1 arg2 ...`` concatenates its args before executing.
         embedded = " ".join(tokens[1:])
         if embedded:
+            if "$" in embedded:
+                return "unknown"
             nested = map_command(embedded, _depth=depth + 1)
             if nested != "shell":
                 return nested
@@ -213,46 +567,161 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     # positives and we preserve that coverage.
     for i, tok in enumerate(tokens):
         basename = os.path.basename(tok)
-        if basename == "git" and tokens[i + 1 : i + 2] == ["push"]:
-            if _has_force_flag(tokens[i + 2 :]):
+        if i > 0 and basename in _SHELL_WRAPPERS:
+            return _classify_wrapper_c(tokens[i + 1 :], depth)
+        if basename == "git":
+            subcommand_index = _git_subcommand_index(tokens, i)
+            if subcommand_index == _GIT_SUBCOMMAND_UNKNOWN:
+                return "unknown"
+            if (
+                subcommand_index is not None
+                and tokens[subcommand_index] in {"push", "send-pack"}
+                and _has_force_flag(tokens[subcommand_index + 1 :])
+            ):
                 return "push.force"
+        if basename == "git-send-pack" and _has_force_flag(tokens[i + 1 :]):
+            return "push.force"
         if basename == "gh" and tokens[i + 1 : i + 3] == ["pr", "merge"]:
             return "merge.pr"
     return "shell"
 
 
 def _classify_wrapper_c(args: list[str], depth: int) -> str:
-    """Handle ``bash -c <cmd>`` / ``sh -c <cmd>`` embedded commands.
+    """Handle ``bash -c <cmd>`` / ``bash -lc <cmd>`` embedded commands.
 
-    Scans ``args`` for a ``-c`` option and recursively classifies its
-    argument. Returns ``"shell"`` when no ``-c`` is present or no
-    escalation is found.
+    Recognizes bounded short-option clusters that contain ``c`` and skips
+    known option arguments before recursively classifying the command.
+    Unsupported option forms return ``unknown`` rather than guessing.
     """
     j = 0
     while j < len(args):
-        if args[j] == "-c" and j + 1 < len(args):
+        arg = args[j]
+        if arg == "--":
+            # A following ``-c`` is a script filename, not a shell option.
+            return "unknown"
+        if _is_shell_short_option_cluster_with_c(arg):
+            if j + 1 >= len(args):
+                return "unknown"
             return map_command(args[j + 1], _depth=depth + 1)
-        j += 1
-    return "shell"
+        if arg in _SHELL_OPTIONS_WITH_VALUE:
+            if j + 1 >= len(args):
+                return "unknown"
+            j += 2
+            continue
+        if _is_shell_short_option_cluster(arg):
+            j += 1
+            continue
+        if arg.startswith("-") or arg.startswith("+"):
+            return "unknown"
+        # The first non-option is the script filename, so later ``-c`` text
+        # cannot introduce a nested command string. Its contents are outside
+        # this parser, so permitting it as generic shell would be fail-open.
+        return "unknown"
+    # A bare interpreter can read executable input from a pipe, heredoc, or
+    # here-string. Only an explicit, inspected ``-c`` form is classifiable.
+    return "unknown"
+
+
+def _is_shell_short_option_cluster_with_c(arg: str) -> bool:
+    """True for a bounded Bash short-option cluster containing ``c``."""
+    return _is_shell_short_option_cluster(arg) and "c" in arg[1:]
+
+
+def _is_shell_short_option_cluster(arg: str) -> bool:
+    """True when ``arg`` contains only modeled no-argument shell flags."""
+    return (
+        len(arg) > 1
+        and arg.startswith("-")
+        and not arg.startswith("--")
+        and all(flag in _SHELL_SHORT_OPTIONS_WITHOUT_ARGUMENT for flag in arg[1:])
+    )
+
+
+def _classify_env(args: list[str], depth: int) -> str:
+    """Classify the command executed by a bounded ``env`` invocation."""
+    command_start = _env_command_start(args)
+    if command_start is None:
+        return "unknown"
+    if command_start == len(args):
+        return "shell"
+    return _classify_statement(args[command_start:], depth + 1)
+
+
+def _env_command_start(args: list[str]) -> int | None:
+    """Return the command offset after supported ``env`` options and vars."""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            return index + 1
+        if _is_env_assignment(arg) or arg in {"-0", "-i", "--ignore-environment", "--null"}:
+            index += 1
+            continue
+        if arg in {"-C", "-u", "--chdir", "--unset"}:
+            if index + 1 >= len(args):
+                return None
+            index += 2
+            continue
+        if arg.startswith("--chdir=") or arg.startswith("--unset="):
+            index += 1
+            continue
+        # ``-S`` needs a second shell-like parse; unknown flags may have
+        # arguments, so neither is safe to skip speculatively.
+        if arg.startswith("-"):
+            return None
+        return index
+    return index
+
+
+def _git_subcommand_index(tokens: list[str], git_index: int) -> int | None:
+    """Return the Git subcommand offset or a fail-closed sentinel."""
+    index = git_index + 1
+    while index < len(tokens):
+        arg = tokens[index]
+        if arg in _GIT_GLOBAL_OPTIONS_WITH_VALUE:
+            if index + 1 >= len(tokens):
+                return _GIT_SUBCOMMAND_UNKNOWN
+            index += 2
+            continue
+        if arg in _GIT_GLOBAL_OPTIONS_WITHOUT_VALUE:
+            index += 1
+            continue
+        if arg.startswith(_GIT_GLOBAL_OPTIONS_WITH_ATTACHED_VALUE):
+            index += 1
+            continue
+        if arg == "--" or arg.startswith("-"):
+            return _GIT_SUBCOMMAND_UNKNOWN
+        return index
+    return None
 
 
 def _has_force_flag(push_args: list[str]) -> bool:
     """True if any arg to ``git push`` is a force-style flag.
 
     Recognizes ``--force``, ``--force-with-lease`` (including the
-    ``--force-with-lease=<refname>`` form), ``-f``, and short-option
-    clusters that contain ``f`` (e.g. ``-fu``).
+    ``--force-with-lease=<refname>`` form), ``--mirror``, ``-f``, short-option
+    clusters that contain ``f`` (e.g. ``-fu``), and ``+`` force refspecs.
     """
     for arg in push_args:
-        if arg in ("--force", "-f"):
+        if arg in ("--force", "--mirror", "-f"):
             return True
         if arg.startswith("--force-with-lease"):
+            return True
+        if len(arg) > 2 and any(
+            option.startswith(arg)
+            for option in ("--force", "--force-with-lease", "--mirror")
+        ):
+            # Git accepts unique long-option abbreviations. Treat every
+            # force-related prefix conservatively rather than reproducing
+            # version-specific abbreviation resolution.
             return True
         if (
             arg.startswith("-")
             and not arg.startswith("--")
             and "f" in arg[1:]
         ):
+            return True
+        if len(arg) > 1 and arg.startswith("+"):
             return True
     return False
 
@@ -269,6 +738,8 @@ def _is_env_assignment(token: str) -> bool:
 
 def _stricter(a: str, b: str) -> str:
     """Return whichever of ``a`` or ``b`` is the stricter capability."""
+    if a == "unknown" or b == "unknown":
+        return "unknown"
     return a if _STRICTNESS.get(a, 0) >= _STRICTNESS.get(b, 0) else b
 
 

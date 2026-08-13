@@ -142,8 +142,9 @@ Decisions are evaluated in this order:
 3. **`default_mode` fallback** — used when no repo policy declares the
    capability. Defaults to `require_approval` if unset.
 
-`HARD_GUARDRAILS` is exported as a constant so tooling can assert against
-it without importing private symbols.
+`HARD_GUARDRAILS` remains an ordinary inspection `dict` for compatibility.
+Evaluation uses separate private immutable state, so mutating or rebinding the
+public copy cannot weaken the force-push guardrail.
 
 ## Audit event schema
 
@@ -309,6 +310,11 @@ The stable wrapper contract is:
 - Agent-specific hooks may translate both `require_approval` and `deny` to the
   hook platform's blocking exit code when the platform has no inline approval
   state.
+- The example hooks take first-write state only from
+  `AGENT_POLICY_FIRST_WRITE=true|false`, never from a hook payload. For an
+  external mutating capability, it is required: `true` supplies
+  `--first-write`, while `false` does not. Read-only Claude tools are
+  unaffected.
 - `--audit-event` emits deterministic evidence for the decision that was made;
   it is not itself an approval record.
 
@@ -334,7 +340,8 @@ See [`examples/`](examples/). Runnable after installing the package
 - `claude_code_hook.sh` — a Claude Code `PreToolUse` hook that reads the
   hook payload from stdin, maps the tool to a capability, and shells out
   to `check.py`. Set `AGENT_POLICY_FILE` and `AGENT_POLICY_REPO` in the
-  hook's environment, then point `~/.claude/settings.json` at it.
+  hook's environment, then point `~/.claude/settings.json` at it. Unknown
+  tools and wrapper failures block with fixed sanitized stderr.
 - `codex_hook.sh` — a Codex CLI `PreToolUse` hook (**block-style shell
   guardrail pilot**). This wrapper only maps Bash commands: `git push
   --force` to `push.force`, `gh pr merge` to `merge.pr`, and everything else
@@ -343,12 +350,14 @@ See [`examples/`](examples/). Runnable after installing the package
 - `codex_permission_request_hook.sh` — a Codex CLI `PermissionRequest` hook
   (**delegation shell pilot**). It returns `allow` for `auto_allow`, returns
   `deny` for `deny`, and returns no decision for `require_approval`, which
-  delegates to Codex's normal approval prompt.
+  delegates to Codex's normal approval prompt. Any wrapper failure returns a
+  fixed protocol-valid deny JSON payload instead of exposing an error.
 - `capability_map.py` — stdlib-only helper that turns a raw Bash
-  command into one of `push.force` / `merge.pr` / `shell`. The hook
+  command into `push.force` / `merge.pr` / `shell` / `unknown`. The hook
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
-  produce a false `push.force` classification. See the file header
+  produce a false `push.force` classification; ambiguous syntax becomes
+  `unknown` and is rejected before policy evaluation. See the file header
   for the exact algorithm (heredoc stripping → `shlex` tokenization →
   scan-anywhere → recursive `bash -c` / `eval`).
 
@@ -368,7 +377,7 @@ shell commands.
   run failure and the tool call continues. To stop execution from a `PreToolUse`
   hook, return `permissionDecision: "deny"`, legacy `decision: "block"`, or exit
   `2`. `examples/codex_hook.sh` uses exit `2` for both `deny` and
-  `require_approval`, with stderr distinguishing the policy decision.
+  `require_approval`, with one fixed sanitized stderr message.
 - **PermissionRequest delegation path.** `PermissionRequest` runs just before
   Codex asks for approval. A hook can return `allow` or `deny`; if it returns
   no decision, Codex falls back to the normal approval flow. The
@@ -378,9 +387,9 @@ shell commands.
   not a full shell. It handles quoted literals, heredocs, compound
   statements, and the common `bash -c '...'` / `eval` wrappers, but
   exotic forms such as `git --git-dir=/path push --force`, process
-  substitution, or function definitions are not modeled. The
-  fail-closed default is `shell`, which policy can still flag as
-  `require_approval` or `deny`.
+  substitution, or function definitions are not modeled. Clear commands
+  outside the narrow patterns map to `shell`, while ambiguous, unbalanced,
+  or unterminated parsing maps to `unknown` and is rejected by the hooks.
 
 ## Releases
 
