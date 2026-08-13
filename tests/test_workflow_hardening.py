@@ -116,7 +116,9 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
     assert "contents: read" in publish_job
     assert "attestations: write" not in publish_job
     assert "needs: publish" in verify_job
-    assert "permissions:\n      actions: read\n      contents: read" in verify_job
+    assert "# Read-only post-publication verification" in verify_job
+    assert "actions: read" in verify_job
+    assert "contents: read" in verify_job
     assert "id-token: write" not in verify_job
     assert "attestations: write" not in verify_job
 

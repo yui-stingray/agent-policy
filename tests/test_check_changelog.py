@@ -8,6 +8,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_changelog.py"
 SPEC = importlib.util.spec_from_file_location("check_changelog", SCRIPT)
@@ -79,3 +81,31 @@ def test_main_extracts_notes_from_explicit_release_changelog(tmp_path: Path) -> 
         == 0
     )
     assert notes.read_text(encoding="utf-8") == "- Historical release.\n"
+
+
+def test_main_rejects_empty_notes_without_write_mode(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    changelog = tmp_path / "private-location" / "release-changelog.md"
+    changelog.parent.mkdir()
+    changelog.write_text(
+        "# Changelog\n\n## 0.1.6 - 2026-05-01\n\n## 0.1.5\n\n- Older.\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        MODULE.main(
+            [
+                "check_changelog.py",
+                "--changelog",
+                str(changelog),
+                "--version",
+                "0.1.6",
+            ]
+        )
+        == 1
+    )
+    error = capsys.readouterr().err
+    assert "selected changelog has an empty release notes section" in error
+    assert str(changelog) not in error
+    assert changelog.name not in error

@@ -5,10 +5,10 @@ Why: fail releases before tagging when user-visible release notes are missing.
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 import tomllib
-import argparse
 from pathlib import Path
 
 
@@ -41,7 +41,9 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
             start = index + 1
             break
     if start is None:
-        raise ValueError(f"CHANGELOG.md missing release notes for version {version}")
+        raise ValueError(
+            f"selected changelog is missing release notes for version {version}"
+        )
 
     body: list[str] = []
     for line in lines[start:]:
@@ -52,7 +54,7 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
     notes = "\n".join(body).strip()
     if not notes:
         raise ValueError(
-            f"CHANGELOG.md has an empty release notes section for version {version}"
+            f"selected changelog has an empty release notes section for version {version}"
         )
     return notes + "\n"
 
@@ -76,22 +78,25 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     version = args.version or load_project_version(Path("pyproject.toml"))
-    changelog = args.changelog
-    versions = changelog_versions(changelog)
-    if version not in versions:
-        print(
-            f"CHANGELOG.md missing release notes for version {version}", file=sys.stderr
-        )
+    try:
+        notes = extract_release_notes(args.changelog, version)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (OSError, UnicodeError):
+        print("selected changelog could not be read", file=sys.stderr)
         return 1
 
     if args.write_notes:
-        Path(args.write_notes).write_text(
-            extract_release_notes(changelog, version), encoding="utf-8"
-        )
-        print(f"wrote release notes for version {version} to {args.write_notes}")
+        try:
+            Path(args.write_notes).write_text(notes, encoding="utf-8")
+        except OSError:
+            print("release notes could not be written", file=sys.stderr)
+            return 1
+        print(f"wrote release notes for version {version}")
         return 0
 
-    print(f"CHANGELOG.md contains release notes for version {version}")
+    print(f"selected changelog contains release notes for version {version}")
     return 0
 
 

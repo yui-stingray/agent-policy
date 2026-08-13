@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import stat
 import sys
 import urllib.error
@@ -217,6 +218,7 @@ def _pypi_data(
                 "yanked": filename in yanked,
                 "digests": {"sha256": _sha256(content)},
                 "url": f"https://files.pythonhosted.org/packages/{filename}",
+                "size": len(content),
             }
             for filename, content in files.items()
         ]
@@ -228,7 +230,7 @@ def _remote_digest(pypi_data: dict[str, Any], files: dict[str, bytes]) -> Any:
         record["url"]: _sha256(files[record["filename"]])
         for record in pypi_data["urls"]
     }
-    return lambda url: digests[url]
+    return lambda url, _size: digests[url]
 
 
 def _write_zip(
@@ -576,14 +578,14 @@ def test_rejects_unavailable_or_ambiguous_artifact(case: str) -> None:
             "head_sha": SHA,
         }
 
+    jobs = _current_jobs_payload(publish="failure", verify="skipped")
     with pytest.raises(MODULE.RecoveryVerificationError, match="artifact"):
-        jobs = _current_jobs_payload(publish="failure", verify="skipped")
         _validate_recovery(_run_data("failure"), jobs, artifacts)
 
 
 def test_recovery_rejects_rerun_artifact_identity_as_ambiguous() -> None:
+    jobs = _current_jobs_payload(publish="failure", verify="skipped")
     with pytest.raises(MODULE.RecoveryVerificationError, match="multiple attempts"):
-        jobs = _current_jobs_payload(publish="failure", verify="skipped")
         _validate_recovery(_run_data("failure", attempt=2), jobs)
 
 
@@ -646,6 +648,7 @@ def test_rejects_missing_extra_or_yanked_pypi_files(tmp_path: Path, case: str) -
                 "yanked": False,
                 "digests": {"sha256": "0" * 64},
                 "url": "https://files.pythonhosted.org/packages/unexpected.whl",
+                "size": 1,
             }
         )
     else:
@@ -659,7 +662,24 @@ def test_rejects_missing_extra_or_yanked_pypi_files(tmp_path: Path, case: str) -
             "yui-agent-policy",
             VERSION,
             pypi_data,
-            remote_digest=lambda _url: pytest.fail("unexpected byte download"),
+            remote_digest=lambda _url, _size: pytest.fail("unexpected byte download"),
+        )
+
+
+def test_rejects_non_authoritative_pypi_file_url(tmp_path: Path) -> None:
+    archive_path = tmp_path / "artifact.zip"
+    _write_zip(archive_path)
+    pypi_data = _pypi_data()
+    filename = pypi_data["urls"][0]["filename"]
+    pypi_data["urls"][0]["url"] = f"https://invalid.example/packages/{filename}"
+
+    with pytest.raises(MODULE.RecoveryVerificationError, match="not authoritative"):
+        MODULE.verify_published_artifact_zip(
+            archive_path,
+            "yui-agent-policy",
+            VERSION,
+            pypi_data,
+            remote_digest=lambda _url, _size: pytest.fail("unexpected byte download"),
         )
 
 
@@ -677,7 +697,7 @@ def test_rejects_artifact_hash_mismatch(tmp_path: Path) -> None:
             "yui-agent-policy",
             VERSION,
             pypi_data,
-            remote_digest=lambda _url: pytest.fail("unexpected byte download"),
+            remote_digest=lambda _url, _size: pytest.fail("unexpected byte download"),
         )
 
 
@@ -693,7 +713,7 @@ def test_rejects_published_byte_hash_mismatch(tmp_path: Path) -> None:
             "yui-agent-policy",
             VERSION,
             _pypi_data(),
-            remote_digest=lambda _url: "0" * 64,
+            remote_digest=lambda _url, _size: "0" * 64,
         )
 
 
@@ -783,10 +803,49 @@ def test_network_failure_does_not_expose_raw_published_url(
     monkeypatch.setattr(MODULE.urllib.request, "urlopen", fail_fetch)
 
     with pytest.raises(MODULE.RecoveryVerificationError) as exc_info:
-        MODULE.fetch_published_file_sha256(raw_url)
+        MODULE.fetch_published_file_sha256(raw_url, 100)
 
     assert raw_url not in str(exc_info.value)
     assert "private-file.whl" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("content", [b"ab", b"abcd"])
+def test_published_file_download_requires_exact_reported_size(
+    monkeypatch: pytest.MonkeyPatch, content: bytes
+) -> None:
+    raw_url = "https://files.pythonhosted.org/packages/release.whl"
+
+    class FakeResponse(io.BytesIO):
+        def geturl(self) -> str:
+            return raw_url
+
+    monkeypatch.setattr(
+        MODULE.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(content),
+    )
+
+    with pytest.raises(MODULE.RecoveryVerificationError, match="file size"):
+        MODULE.fetch_published_file_sha256(raw_url, 3)
+
+
+def test_published_file_download_hashes_exact_reported_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_url = "https://files.pythonhosted.org/packages/release.whl"
+    content = b"abc"
+
+    class FakeResponse(io.BytesIO):
+        def geturl(self) -> str:
+            return raw_url
+
+    monkeypatch.setattr(
+        MODULE.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(content),
+    )
+
+    assert MODULE.fetch_published_file_sha256(raw_url, len(content)) == _sha256(content)
 
 
 def test_main_does_not_expose_missing_metadata_path(

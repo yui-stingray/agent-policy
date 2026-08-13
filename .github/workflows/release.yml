@@ -143,6 +143,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/yui-agent-policy
     permissions:
+      # Read build artifacts and obtain the OIDC identity used by Trusted Publishing.
       actions: read
       contents: read
       id-token: write
@@ -160,6 +161,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     permissions:
+      # Read-only post-publication verification; this job has no OIDC permission.
       actions: read
       contents: read
     steps:

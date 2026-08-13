@@ -18,7 +18,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Never
 from urllib.parse import unquote, urlparse
 
 if __package__:
@@ -64,7 +64,8 @@ class RecoveryVerificationError(ValueError):
 class SanitizedArgumentParser(argparse.ArgumentParser):
     """Reject malformed CLI input without echoing paths or other arguments."""
 
-    def error(self, _message: str) -> None:
+    def error(self, message: str) -> Never:
+        del message
         raise RecoveryVerificationError("release verifier arguments are invalid")
 
 
@@ -76,6 +77,7 @@ class PublishedFile:
     package_type: str
     sha256: str
     url: str
+    size: int
 
 
 def _is_positive_int(value: object) -> bool:
@@ -383,7 +385,7 @@ def _artifact_id(
 
 
 def validate_release_run(
-    run_data: dict[str, Any],
+    run_data: object,
     jobs_payload: object,
     artifacts_payload: object | None,
     *,
@@ -508,11 +510,13 @@ def published_files(
         package_type = raw_file.get("packagetype")
         digests = raw_file.get("digests")
         url = raw_file.get("url")
+        size = raw_file.get("size")
         if (
             not isinstance(filename, str)
             or expected.get(filename) != package_type
             or not isinstance(digests, dict)
             or not isinstance(url, str)
+            or not _is_positive_int(size)
         ):
             raise RecoveryVerificationError(
                 "PyPI release integrity metadata is incomplete"
@@ -527,7 +531,7 @@ def published_files(
         if filename in records:
             raise RecoveryVerificationError("PyPI release file metadata is ambiguous")
         records[filename] = PublishedFile(
-            filename, str(package_type), sha256.lower(), url
+            filename, str(package_type), sha256.lower(), url, int(size)
         )
 
     if set(records) != set(expected):
@@ -537,8 +541,10 @@ def published_files(
     return records
 
 
-def fetch_published_file_sha256(url: str) -> str:
-    """Hash bytes fetched from an authoritative PyPI URL without logging it."""
+def fetch_published_file_sha256(url: str, expected_size: int) -> str:
+    """Hash exactly the PyPI-reported byte count without logging the URL."""
+    if not _is_positive_int(expected_size):
+        raise RecoveryVerificationError("published file size is invalid")
     filename = unquote(PurePosixPath(urlparse(url).path).name)
     _validate_pypi_file_url(url, filename)
     request = urllib.request.Request(
@@ -553,8 +559,19 @@ def fetch_published_file_sha256(url: str) -> str:
                     "published file redirected unexpectedly"
                 )
             _validate_pypi_file_url(final_url, filename)
-            for chunk in iter(lambda: response.read(1024 * 1024), b""):
+            remaining = expected_size
+            while remaining:
+                chunk = response.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise RecoveryVerificationError(
+                        "published file size does not match authoritative metadata"
+                    )
                 digest.update(chunk)
+                remaining -= len(chunk)
+            if response.read(1):
+                raise RecoveryVerificationError(
+                    "published file size does not match authoritative metadata"
+                )
     except RecoveryVerificationError:
         raise
     except Exception:
@@ -609,7 +626,7 @@ def verify_published_artifact_zip(
     version: str,
     pypi_data: dict[str, Any] | None,
     *,
-    remote_digest: Callable[[str], str] = fetch_published_file_sha256,
+    remote_digest: Callable[[str, int], str] = fetch_published_file_sha256,
 ) -> dict[str, str]:
     """Require artifact ZIP, PyPI metadata, and PyPI bytes to hash equally."""
     remote_files = published_files(project_name, version, pypi_data)
@@ -621,7 +638,7 @@ def verify_published_artifact_zip(
                 f"release artifact SHA-256 does not match PyPI metadata: {filename}"
             )
         try:
-            published_digest = remote_digest(remote_file.url)
+            published_digest = remote_digest(remote_file.url, remote_file.size)
         except RecoveryVerificationError:
             raise
         except Exception:
