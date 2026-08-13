@@ -50,5 +50,32 @@ def test_extract_release_notes_returns_selected_body(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert MODULE.extract_release_notes(changelog, "0.1.4") == "- Current release.\n- Second item.\n"
+    assert (
+        MODULE.extract_release_notes(changelog, "0.1.4")
+        == "- Current release.\n- Second item.\n"
+    )
 
+
+def test_main_extracts_notes_from_explicit_release_changelog(tmp_path: Path) -> None:
+    changelog = tmp_path / "release-changelog.md"
+    notes = tmp_path / "release-notes.md"
+    changelog.write_text(
+        "# Changelog\n\n## 0.1.6 - 2026-05-01\n\n- Historical release.\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        MODULE.main(
+            [
+                "check_changelog.py",
+                "--changelog",
+                str(changelog),
+                "--version",
+                "0.1.6",
+                "--write-notes",
+                str(notes),
+            ]
+        )
+        == 0
+    )
+    assert notes.read_text(encoding="utf-8") == "- Historical release.\n"

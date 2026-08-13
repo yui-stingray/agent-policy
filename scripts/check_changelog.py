@@ -51,25 +51,43 @@ def extract_release_notes(changelog_path: Path, version: str) -> str:
 
     notes = "\n".join(body).strip()
     if not notes:
-        raise ValueError(f"CHANGELOG.md has an empty release notes section for version {version}")
+        raise ValueError(
+            f"CHANGELOG.md has an empty release notes section for version {version}"
+        )
     return notes + "\n"
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", help="version to check; defaults to pyproject.toml [project].version")
-    parser.add_argument("--write-notes", help="write extracted notes for the selected version to this path")
+    parser.add_argument(
+        "--version",
+        help="version to check; defaults to pyproject.toml [project].version",
+    )
+    parser.add_argument(
+        "--write-notes",
+        help="write extracted notes for the selected version to this path",
+    )
+    parser.add_argument(
+        "--changelog",
+        type=Path,
+        default=Path("CHANGELOG.md"),
+        help="changelog file to read; defaults to CHANGELOG.md",
+    )
     args = parser.parse_args(argv[1:])
 
     version = args.version or load_project_version(Path("pyproject.toml"))
-    changelog = Path("CHANGELOG.md")
+    changelog = args.changelog
     versions = changelog_versions(changelog)
     if version not in versions:
-        print(f"CHANGELOG.md missing release notes for version {version}", file=sys.stderr)
+        print(
+            f"CHANGELOG.md missing release notes for version {version}", file=sys.stderr
+        )
         return 1
 
     if args.write_notes:
-        Path(args.write_notes).write_text(extract_release_notes(changelog, version), encoding="utf-8")
+        Path(args.write_notes).write_text(
+            extract_release_notes(changelog, version), encoding="utf-8"
+        )
         print(f"wrote release notes for version {version} to {args.write_notes}")
         return 0
 
