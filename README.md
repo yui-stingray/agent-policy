@@ -4,7 +4,7 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.9` alpha. The core evaluator API is stable for v0.1;
+**Status**: `0.1.10` alpha. The core evaluator API is stable for v0.1;
 additive wrapper helpers may still grow while the package is alpha.
 
 ## Why
@@ -431,7 +431,7 @@ provenance and integrity evidence for a specific artifact and workflow
 identity. They do not prove code correctness, dependency safety, maintainer
 approval, absence of secrets, or policy compliance.
 
-To verify the GitHub provenance for downloaded `0.1.9` artifacts, check the
+To verify the GitHub provenance for downloaded `0.1.10` artifacts, check the
 tag, repository, and signer workflow explicitly:
 
 ```bash
@@ -447,7 +447,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-version = "0.1.9"
+version = "0.1.10"
 target = Path(sys.argv[1])
 request_timeout_seconds = 20
 metadata_url = f"https://pypi.org/pypi/yui-agent-policy/{version}/json"
@@ -500,14 +500,14 @@ for filename in sorted(expected):
         with (target / filename).open("xb") as destination:
             shutil.copyfileobj(response, destination)
 PY
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.9-py3-none-any.whl" \
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.10-py3-none-any.whl" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.9
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.9.tar.gz" \
+  --source-ref refs/tags/v0.1.10
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.10.tar.gz" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.9
+  --source-ref refs/tags/v0.1.10
 )
 ```
 

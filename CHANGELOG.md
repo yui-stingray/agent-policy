@@ -6,6 +6,8 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+## 0.1.10 - 2026-08-13
+
 - Made hard guardrail evaluation read private immutable state instead of the
   exported mutable `HARD_GUARDRAILS` dictionary, so public mutation or rebinding
   cannot weaken unconditional force-push denial.
