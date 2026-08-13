@@ -34,11 +34,15 @@
 #
 # Optional environment:
 #   AGENT_POLICY_OWNERSHIP — "internal" or "external" (unset by default)
+#   AGENT_POLICY_FIRST_WRITE — wrapper-owned state for external mutating
+#       capabilities: exactly "true" adds --first-write; exactly "false"
+#       does not. Missing or other values block. It is never read from the
+#       hook payload.
 #
 # Exit codes (Claude Code PreToolUse contract):
 #   0 — allow silently
 #   2 — block; stderr is shown to Claude
-#   1 — hook error; non-blocking, surfaced to the user
+#   All wrapper failures also exit 2 with fixed sanitized stderr.
 #
 # Capability mapping (intentionally narrow — extend in your own wrapper):
 #   Read / Glob / Grep         → read
@@ -47,7 +51,7 @@
 #     git push ... --force[-with-lease] / -f → push.force
 #     gh pr merge ...                        → merge.pr
 #     anything else                          → shell
-#   any other tool             → write   (fail-closed)
+#   any other tool             → block explicitly
 #
 # Bash parsing: delegated to examples/capability_map.py, which uses
 # shlex tokenization (not full shell semantics). Quoted literals like
@@ -58,33 +62,60 @@
 # Limitations (fine for an example, not for production):
 # - Tokenization is heuristic. Exotic forms such as
 #   `git --git-dir=/path push --force` or process substitution are
-#   not caught. Compound statements are classified per-statement
-#   and the strictest capability wins (fail-closed direction).
+#   not fully modeled. Ambiguous, unbalanced, or unterminated syntax maps
+#   to `unknown` and blocks before policy evaluation. Compound statements
+#   are classified per-statement and the strictest capability wins.
 # - No caching: every tool call shells out to python3. For high-frequency
 #   workflows, wrap check.py in a long-lived subprocess instead.
 
-set -euo pipefail
+# Bash processes its startup environment, including BASH_ENV, before this
+# file runs; that launcher boundary is trusted. This must be the first
+# executable statement so inherited xtrace cannot expose hook inputs.
+set +x
+set -Eeuo pipefail
+
+# PreToolUse treats exit 2 as a hard block. Every wrapper failure uses this
+# fixed text so payloads, policy paths, and evaluator diagnostics stay private.
+readonly BLOCK_MESSAGE="agent-policy hook: blocked"
+
+block() {
+    trap - ERR
+    printf '%s\n' "$BLOCK_MESSAGE" >&2
+    exit 2
+}
+
+trap 'block' ERR
+
+is_single_json_object() {
+    jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1
+}
 
 if ! command -v jq >/dev/null 2>&1; then
-    echo "agent-policy hook: jq is required but not installed" >&2
-    exit 1
+    block
+fi
+if [[ -z "${AGENT_POLICY_FILE:-}" || -z "${AGENT_POLICY_REPO:-}" ]]; then
+    block
 fi
 
-: "${AGENT_POLICY_FILE:?AGENT_POLICY_FILE must be set to a policy.toml path}"
-: "${AGENT_POLICY_REPO:?AGENT_POLICY_REPO must be set to a repo identifier}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+SCRIPT_DIR="${SCRIPT_SOURCE%/*}"
+if [[ "$SCRIPT_DIR" == "$SCRIPT_SOURCE" ]]; then
+    SCRIPT_DIR="."
+fi
+if ! SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P 2>/dev/null)"; then
+    block
+fi
 CHECK_PY="${SCRIPT_DIR}/check.py"
 CAPABILITY_MAP_PY="${SCRIPT_DIR}/capability_map.py"
 
-# Slurp the entire stdin payload once. The hook contract delivers a
-# single JSON object; jq is invoked twice against the same buffer.
-PAYLOAD="$(cat)"
-
-TOOL_NAME="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // empty')"
-if [[ -z "$TOOL_NAME" ]]; then
-    echo "agent-policy hook: missing tool_name in hook payload" >&2
-    exit 1
+if ! PAYLOAD="$(cat 2>/dev/null)"; then
+    block
+fi
+if ! is_single_json_object <<<"$PAYLOAD"; then
+    block
+fi
+if ! TOOL_NAME="$(jq -er '.tool_name | strings | select(length > 0 and index("\u0000") == null)' <<<"$PAYLOAD" 2>/dev/null)"; then
+    block
 fi
 
 case "$TOOL_NAME" in
@@ -95,25 +126,26 @@ case "$TOOL_NAME" in
         CAPABILITY="write"
         ;;
     Bash)
-        COMMAND="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty')"
-        if [[ -z "$COMMAND" ]]; then
-            echo "agent-policy hook: missing tool_input.command for Bash" >&2
-            exit 1
+        if ! COMMAND="$(jq -er '.tool_input.command | strings | select(length > 0 and index("\u0000") == null)' <<<"$PAYLOAD" 2>/dev/null)"; then
+            block
         fi
-        # Delegate Bash command → capability to the shlex-based helper.
-        # See codex_hook.sh and capability_map.py for rationale.
-        set +e
-        CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND")"
-        MAP_EXIT=$?
-        set -e
-        if [[ $MAP_EXIT -ne 0 || -z "$CAPABILITY" ]]; then
-            echo "agent-policy hook: capability_map.py failed (exit ${MAP_EXIT})" >&2
-            exit 1
+        if ! CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND" 2>/dev/null)"; then
+            block
         fi
         ;;
     *)
-        # Unknown tools fall through to write — fail-closed by default.
-        CAPABILITY="write"
+        # A new Claude tool is not equivalent to write. It must be modeled
+        # explicitly before it can reach policy evaluation.
+        block
+        ;;
+esac
+
+case "$CAPABILITY" in
+    read|write|commit|push|push.force|merge.pr|shell)
+        ;;
+    *)
+        # Includes the classifier's dedicated ``unknown`` result.
+        block
         ;;
 esac
 
@@ -126,29 +158,71 @@ if [[ -n "${AGENT_POLICY_OWNERSHIP:-}" ]]; then
     CHECK_ARGS+=(--ownership-class "$AGENT_POLICY_OWNERSHIP")
 fi
 
-# check.py prints the JSON decision on stdout. We forward it to stderr
-# only on block, so the auto_allow path stays completely silent.
-set +e
-DECISION_JSON="$(python3 "$CHECK_PY" "${CHECK_ARGS[@]}")"
-CHECK_EXIT=$?
-set -e
+# This state belongs to the wrapper environment, never to the tool payload.
+# External mutating actions must say whether this is the first write; a true
+# value activates the evaluator's hard guardrail, while false leaves it off.
+# Read-only Claude tools remain independent of this state.
+if [[ "${AGENT_POLICY_OWNERSHIP:-}" == "external" ]]; then
+    case "$CAPABILITY" in
+        read)
+            ;;
+        write|commit|push|push.force|merge.pr|shell)
+            case "${AGENT_POLICY_FIRST_WRITE:-}" in
+                true)
+                    CHECK_ARGS+=(--first-write)
+                    ;;
+                false)
+                    ;;
+                *)
+                    block
+                    ;;
+            esac
+            ;;
+        *)
+            block
+            ;;
+    esac
+fi
+
+if DECISION_JSON="$(python3 "$CHECK_PY" "${CHECK_ARGS[@]}" 2>/dev/null)"; then
+    CHECK_EXIT=0
+else
+    CHECK_EXIT=$?
+fi
+
+is_expected_decision() {
+    local expected_mode="$1"
+    jq -se --arg expected_mode "$expected_mode" '
+        length == 1
+        and (.[0] | type == "object")
+        and (.[0] | keys == ["matched_repo", "mode", "reason"])
+        and .[0].mode == $expected_mode
+        and (.[0].reason | type == "string")
+        and (.[0].matched_repo == null or (.[0].matched_repo | type == "string"))
+    ' <<<"$DECISION_JSON" >/dev/null 2>&1
+}
 
 case "$CHECK_EXIT" in
     0)
+        if ! is_expected_decision "auto_allow"; then
+            block
+        fi
+        # Successful auto_allow is deliberately silent.
         exit 0
         ;;
     2)
-        echo "agent-policy: require_approval for ${TOOL_NAME} (capability=${CAPABILITY})" >&2
-        echo "decision: ${DECISION_JSON}" >&2
-        exit 2
+        if ! is_expected_decision "require_approval"; then
+            block
+        fi
+        block
         ;;
     3)
-        echo "agent-policy: DENY ${TOOL_NAME} (capability=${CAPABILITY})" >&2
-        echo "decision: ${DECISION_JSON}" >&2
-        exit 2
+        if ! is_expected_decision "deny"; then
+            block
+        fi
+        block
         ;;
     *)
-        echo "agent-policy hook: check.py failed with exit ${CHECK_EXIT}" >&2
-        exit 1
+        block
         ;;
 esac

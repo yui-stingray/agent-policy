@@ -43,63 +43,82 @@
 #
 # Optional environment:
 #   AGENT_POLICY_OWNERSHIP - "internal" or "external" (unset by default)
+#   AGENT_POLICY_FIRST_WRITE - wrapper-owned state for external mutating
+#       capabilities: exactly "true" adds --first-write; exactly "false"
+#       does not. Missing or other values deny. It is never read from the
+#       hook payload.
 #
 # Decision mapping:
 #   auto_allow        -> {"permissionDecision":"allow", ...}
 #   deny              -> {"permissionDecision":"deny", ...}
 #   require_approval  -> no stdout decision; Codex shows its normal prompt
+#   hook failure       -> fixed protocol-valid deny JSON and exit 0
 #
 # Capability mapping (Bash-only, intentionally narrow):
 #   git push ... --force[-with-lease] / -f -> push.force
 #   gh pr merge ...                         -> merge.pr
 #   anything else                           -> shell
 
-set -euo pipefail
+# Bash processes its startup environment, including BASH_ENV, before this
+# file runs; that launcher boundary is trusted. This must be the first
+# executable statement so inherited xtrace cannot expose hook inputs.
+set +x
+set -Eeuo pipefail
 
-emit_permission_decision() {
-    local decision="$1"
-    local reason="$2"
-    jq -cn \
-        --arg decision "$decision" \
-        --arg reason "$reason" \
-        '{permissionDecision: $decision, permissionDecisionReason: $reason}'
+# This fallback is intentionally literal: it must remain valid protocol JSON
+# even when jq is unavailable or every later dependency has failed.
+readonly DENY_JSON='{"permissionDecision":"deny","permissionDecisionReason":"agent-policy hook: denied"}'
+readonly ALLOW_JSON='{"permissionDecision":"allow","permissionDecisionReason":"agent-policy: auto_allow"}'
+
+deny() {
+    printf '%s\n' "$DENY_JSON"
+    exit 0
+}
+
+trap 'deny' ERR
+
+is_single_json_object() {
+    jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1
 }
 
 if ! command -v jq >/dev/null 2>&1; then
-    echo "agent-policy hook: jq is required but not installed" >&2
-    exit 1
+    deny
+fi
+if [[ -z "${AGENT_POLICY_FILE:-}" || -z "${AGENT_POLICY_REPO:-}" ]]; then
+    deny
 fi
 
-: "${AGENT_POLICY_FILE:?AGENT_POLICY_FILE must be set to a policy.toml path}"
-: "${AGENT_POLICY_REPO:?AGENT_POLICY_REPO must be set to a repo identifier}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+SCRIPT_DIR="${SCRIPT_SOURCE%/*}"
+if [[ "$SCRIPT_DIR" == "$SCRIPT_SOURCE" ]]; then
+    SCRIPT_DIR="."
+fi
+if ! SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" 2>/dev/null && pwd -P 2>/dev/null)"; then
+    deny
+fi
 CHECK_PY="${SCRIPT_DIR}/check.py"
 CAPABILITY_MAP_PY="${SCRIPT_DIR}/capability_map.py"
 
-PAYLOAD="$(cat)"
-
-set +e
-COMMAND="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty')"
-JQ_EXIT=$?
-set -e
-if [[ $JQ_EXIT -ne 0 ]]; then
-    emit_permission_decision "deny" "agent-policy hook: invalid PermissionRequest JSON payload"
-    exit 0
+if ! PAYLOAD="$(cat 2>/dev/null)"; then
+    deny
 fi
-if [[ -z "$COMMAND" ]]; then
-    emit_permission_decision "deny" "agent-policy hook: missing tool_input.command"
-    exit 0
+if ! is_single_json_object <<<"$PAYLOAD"; then
+    deny
 fi
-
-set +e
-CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND")"
-MAP_EXIT=$?
-set -e
-if [[ $MAP_EXIT -ne 0 || -z "$CAPABILITY" ]]; then
-    emit_permission_decision "deny" "agent-policy hook: capability_map.py failed"
-    exit 0
+if ! COMMAND="$(jq -er '.tool_input.command | strings | select(length > 0 and index("\u0000") == null)' <<<"$PAYLOAD" 2>/dev/null)"; then
+    deny
 fi
+if ! CAPABILITY="$(python3 "$CAPABILITY_MAP_PY" "$COMMAND" 2>/dev/null)"; then
+    deny
+fi
+case "$CAPABILITY" in
+    push.force|merge.pr|shell)
+        ;;
+    *)
+        # Includes the classifier's dedicated ``unknown`` result.
+        deny
+        ;;
+esac
 
 CHECK_ARGS=(
     --policy "$AGENT_POLICY_FILE"
@@ -110,26 +129,70 @@ if [[ -n "${AGENT_POLICY_OWNERSHIP:-}" ]]; then
     CHECK_ARGS+=(--ownership-class "$AGENT_POLICY_OWNERSHIP")
 fi
 
-set +e
-CHECK_OUTPUT="$(python3 "$CHECK_PY" "${CHECK_ARGS[@]}" 2>&1)"
-CHECK_EXIT=$?
-set -e
+# This state belongs to the wrapper environment, never to the tool payload.
+# External mutating actions must say whether this is the first write; a true
+# value activates the evaluator's hard guardrail, while false leaves it off.
+if [[ "${AGENT_POLICY_OWNERSHIP:-}" == "external" ]]; then
+    case "$CAPABILITY" in
+        read)
+            ;;
+        write|commit|push|push.force|merge.pr|shell)
+            case "${AGENT_POLICY_FIRST_WRITE:-}" in
+                true)
+                    CHECK_ARGS+=(--first-write)
+                    ;;
+                false)
+                    ;;
+                *)
+                    deny
+                    ;;
+            esac
+            ;;
+        *)
+            deny
+            ;;
+    esac
+fi
+
+if DECISION_JSON="$(python3 "$CHECK_PY" "${CHECK_ARGS[@]}" 2>/dev/null)"; then
+    CHECK_EXIT=0
+else
+    CHECK_EXIT=$?
+fi
+
+is_expected_decision() {
+    local expected_mode="$1"
+    jq -se --arg expected_mode "$expected_mode" '
+        length == 1
+        and (.[0] | type == "object")
+        and (.[0] | keys == ["matched_repo", "mode", "reason"])
+        and .[0].mode == $expected_mode
+        and (.[0].reason | type == "string")
+        and (.[0].matched_repo == null or (.[0].matched_repo | type == "string"))
+    ' <<<"$DECISION_JSON" >/dev/null 2>&1
+}
 
 case "$CHECK_EXIT" in
     0)
-        emit_permission_decision "allow" "agent-policy: auto_allow for Bash (capability=${CAPABILITY})"
+        if ! is_expected_decision "auto_allow"; then
+            deny
+        fi
+        printf '%s\n' "$ALLOW_JSON"
         ;;
     2)
-        echo "agent-policy: require_approval for Bash (capability=${CAPABILITY}); delegating to Codex approval prompt" >&2
+        if ! is_expected_decision "require_approval"; then
+            deny
+        fi
+        # No stdout decision delegates to Codex's normal approval prompt.
+        exit 0
         ;;
     3)
-        emit_permission_decision "deny" "agent-policy: DENY for Bash (capability=${CAPABILITY})"
+        if ! is_expected_decision "deny"; then
+            deny
+        fi
+        deny
         ;;
     *)
-        echo "agent-policy hook: check.py failed with exit ${CHECK_EXIT}" >&2
-        if [[ -n "$CHECK_OUTPUT" ]]; then
-            echo "$CHECK_OUTPUT" >&2
-        fi
-        emit_permission_decision "deny" "agent-policy hook failed closed for Bash (capability=${CAPABILITY})"
+        deny
         ;;
 esac

@@ -6,6 +6,14 @@ Why: keep PyPI releases auditable while the package is still alpha.
 
 ## Unreleased
 
+- Made hard guardrail evaluation read private immutable state instead of the
+  exported mutable `HARD_GUARDRAILS` dictionary, so public mutation or rebinding
+  cannot weaken unconditional force-push denial.
+- Made the example PreToolUse and PermissionRequest wrappers fail closed on
+  initialization, payload, classifier, and evaluator failures; unknown Claude
+  tools and ambiguous shell syntax now block before policy fallback.
+- Added wrapper-owned external first-write state to the example integrations so
+  the existing first-write guardrail is not skipped under `auto_allow` policy.
 - Hardened the documented PyPI provenance flow with isolated temporary
   downloads, bounded requests, exact non-yanked artifact checks,
   redirect-final HTTPS host validation, exclusive file creation, and cleanup

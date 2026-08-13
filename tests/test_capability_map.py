@@ -12,7 +12,8 @@ Why: capability_map.py replaces the previous substring matcher in
        2. The true positives the old matcher caught are still caught
           (sudo/xargs/bash -c/eval/env-assignment/absolute path).
        3. The compound command logic picks the strictest capability.
-       4. Defensive fallbacks return ``shell`` rather than crashing.
+       4. Malformed or ambiguous syntax returns ``unknown`` rather than a
+          policy-controlled capability.
 
 The helper is stdlib-only by design, so these tests do not need the
 agent_policy package installed.
@@ -76,6 +77,75 @@ def test_quoted_literal_is_not_push_force(command: str) -> None:
     assert map_command(command) == "shell"
 
 
+def test_quoted_heredoc_operator_is_literal_and_does_not_hide_next_command() -> None:
+    # ``<<EOF`` is inside single quotes, so it is data rather than a heredoc
+    # operator. The following line is therefore executable shell text and
+    # must still be recognized as a force push.
+    command = "echo '<<EOF'\ngit push --force origin main"
+
+    assert map_command(command) == "push.force"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo `git push --force origin main`",
+        'echo "`git push --force origin main`"',
+        "echo $(git push --force origin main)",
+        'echo "$(git push --force origin main)"',
+        # Single-quote characters are literal inside double quotes and do
+        # not suppress command substitution.
+        'echo "\'$(git push --force origin main)\'"',
+        # Bash removes line continuations before recognizing ``$()``.
+        'echo "$\\\n(git push --force origin main)"',
+        # An unquoted heredoc delimiter enables command substitution in its
+        # body even though ordinary command text there is data.
+        "cat <<EOF\n$(git push --force origin main)\nEOF",
+        "cat <<EOF\n`git push --force origin main`\nEOF",
+        "cat <<EOF\n$\\\n(git push --force origin main)\nEOF",
+        # A substitution after a heredoc operator still runs on the command
+        # line before the body is consumed.
+        'cat <<EOF "$(git push --force origin main)"\nbody\nEOF',
+    ],
+)
+def test_active_command_substitution_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '`git push --force origin main`'",
+        "echo '$(git push --force origin main)'",
+        # A line continuation remains literal inside single quotes.
+        "echo '$\\\n(git push --force origin main)'",
+        # Backslash quoting inside double quotes makes these literal data.
+        r'echo "\`git push --force origin main\`"',
+        r'echo "\$(git push --force origin main)"',
+        r"echo \`git push --force origin main\`",
+        # Quoting the heredoc delimiter disables expansion in its body.
+        "cat <<'EOF'\n$(git push --force origin main)\nEOF",
+        "cat <<'EOF'\n`git push --force origin main`\nEOF",
+        "cat <<'EOF'\n$\\\n(git push --force origin main)\nEOF",
+        # Backslash quoting also disables individual substitutions in an
+        # otherwise expanding heredoc body.
+        "cat <<EOF\n\\$(git push --force origin main)\nEOF",
+        "cat <<EOF\n\\`git push --force origin main\\`\nEOF",
+        # Arithmetic expansion is not command substitution.
+        'echo "$((1 + 2))"',
+        'bash -c \'printf "%s\\n" "$HOME"\'',
+        "builtin printf '%s\\n' ok",
+    ],
+)
+def test_literal_or_non_command_substitution_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+def test_arithmetic_shift_is_shell_but_nested_command_substitution_is_unknown() -> None:
+    assert map_command("((x = 1 << 2))") == "shell"
+    assert map_command("((x = $(printf 1) << 2))") == "unknown"
+
+
 # ---------------------------------------------------------------------------
 # True positives: must still classify as push.force
 # ---------------------------------------------------------------------------
@@ -87,6 +157,12 @@ def test_quoted_literal_is_not_push_force(command: str) -> None:
         "git push --force origin master",
         "git push --force-with-lease origin master",
         "git push --force-with-lease=origin/main",
+        "git push --mirror origin",
+        "git push origin +HEAD:main",
+        "git push --force-w origin main",
+        "git push --mir origin",
+        "git send-pack --force origin HEAD:main",
+        "git-send-pack --force origin HEAD:main",
         "git push -f origin main",
         # Short-option cluster: -fu == -f -u.
         "git push -fu origin main",
@@ -111,6 +187,54 @@ def test_quoted_literal_is_not_push_force(command: str) -> None:
 )
 def test_force_push_is_detected(command: str) -> None:
     assert map_command(command) == "push.force"
+
+
+@pytest.mark.parametrize(
+    ("command", "capability"),
+    [
+        ("bash -lc \"git push --force origin main\"", "push.force"),
+        ("env bash -c \"git push --force origin main\"", "push.force"),
+        ("cat <(bash -c \"git push --force origin main\")", "unknown"),
+        ("git -C /tmp push --force origin main", "push.force"),
+        ("git -c alias.p=push p --force origin main", "unknown"),
+        ("git --config-env=alias.p=GIT_ALIAS p --force origin main", "unknown"),
+        ("bash <<'EOF'\ngit push --force origin main\nEOF", "unknown"),
+        ("bash <<< 'git push --force origin main'", "unknown"),
+        ("printf '%s\\n' 'git push --force origin main' | bash", "unknown"),
+        ("bash reviewed-script.sh", "unknown"),
+        ('cmd="git push --force origin main"; bash -c "$cmd"', "unknown"),
+        ("runner=bash; $runner -c 'git push --force origin main'", "unknown"),
+        ("builtin eval 'git push --force origin main'", "unknown"),
+        ("bash -c 'echo safe'\ngit push --force origin main", "push.force"),
+        ("F=--force; git push $F origin main", "unknown"),
+        ("REF=+HEAD:main; git push origin $REF", "unknown"),
+    ],
+)
+def test_force_push_execution_forms_do_not_fall_through_to_shell(
+    command: str,
+    capability: str,
+) -> None:
+    assert map_command(command) == capability
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push -o +ci.skip origin main",
+        "git push -o+ci.skip origin main",
+        "git push --push-option +ci.skip origin main",
+        "git push --push-option=+ci.skip origin main",
+    ],
+)
+def test_push_option_values_are_not_force_refspecs(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+def test_command_dispatch_before_shell_wrapper_returns_unknown() -> None:
+    assert (
+        map_command('command bash -c "git push --force origin main"')
+        == "unknown"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +292,25 @@ def test_plain_shell(command: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unbalanced_quotes_fall_back_to_shell() -> None:
-    # shlex raises ValueError on unterminated quotes. The helper must
-    # swallow that and return the non-escalating bucket.
-    assert map_command("echo 'unterminated") == "shell"
+def test_unbalanced_quotes_return_unknown() -> None:
+    assert map_command("echo 'unterminated") == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The operator has no delimiter word.
+        "cat <<\ngit push --force origin main",
+        # Delimiter expansion cannot be resolved by the bounded parser.
+        "cat <<$EOF\ngit push --force origin main\nEOF",
+        # The header has no closing delimiter line.
+        "cat <<EOF\ngit push --force origin main",
+        # Multiple real heredocs are deliberately rejected as ambiguous.
+        "cat <<ONE <<TWO\nignored\nONE\nignored\nTWO",
+    ],
+)
+def test_ambiguous_or_unterminated_heredoc_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
 
 
 def test_empty_command_is_shell() -> None:
@@ -187,10 +326,10 @@ def test_deeply_nested_bash_c_is_capped() -> None:
     for _ in range(capability_map._MAX_RECURSION + 2):
         nested = f"bash -c {nested!r}"
     # Depth cap kicks in before the innermost classification is reached.
-    # The helper may still catch it if the recursion fits under the cap,
-    # so we only assert it did not crash and returned a known bucket.
+    # The helper may still catch it if the recursion fits under the cap;
+    # otherwise it must return the dedicated unknown bucket.
     result = map_command(nested)
-    assert result in {"shell", "push.force"}
+    assert result in {"unknown", "push.force"}
 
 
 # ---------------------------------------------------------------------------

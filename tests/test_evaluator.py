@@ -9,10 +9,12 @@ update ARCHITECTURE.md before changing the test.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+import agent_policy.guardrails as guardrails_module
 from agent_policy import (
     HARD_GUARDRAILS,
     PolicyDecision,
@@ -48,7 +50,30 @@ def test_force_push_is_always_denied_even_with_permissive_repo_policy() -> None:
 
 def test_hard_guardrails_constant_contains_only_force_push() -> None:
     # If this assertion fails, ARCHITECTURE.md §3 must be updated and v0.x bumped.
+    assert isinstance(HARD_GUARDRAILS, dict)
     assert HARD_GUARDRAILS == {"push.force": "deny"}
+    assert json.loads(json.dumps(HARD_GUARDRAILS)) == HARD_GUARDRAILS
+
+
+def test_public_guardrails_mutation_and_rebinding_cannot_weaken_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = dict(HARD_GUARDRAILS)
+    try:
+        HARD_GUARDRAILS.clear()
+        # The evaluator must read its private immutable state, not the public
+        # compatibility copy that an in-process caller can mutate or rebind.
+        monkeypatch.setattr(guardrails_module, "HARD_GUARDRAILS", {})
+        decision = evaluate(
+            PolicyMatrix(default_mode="auto_allow"),
+            repo="acme/app",
+            capability="push.force",
+        )
+    finally:
+        HARD_GUARDRAILS.update(original)
+
+    assert decision.mode == "deny"
+    assert decision.reason == "hard_guardrail"
 
 
 def test_merge_pr_is_always_require_approval_even_when_auto_allowed() -> None:

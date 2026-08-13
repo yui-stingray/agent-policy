@@ -13,14 +13,24 @@ Scope rules (do not expand without a v0.2 bump):
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Final
 
 from .decision import PolicyDecision
 
-HARD_GUARDRAILS: dict[str, str] = {
-    "push.force": "deny",
-}
-"""Unconditional guardrails. Repo policies cannot override these."""
+# Evaluation reads this private, immutable mapping rather than the public
+# compatibility view below. Keeping the evaluator's authority separate from
+# the exported name means callers can inspect the documented guardrails but
+# cannot weaken force-push denial through a mutable public object.
+_EVALUATION_HARD_GUARDRAILS: Final[Mapping[str, str]] = MappingProxyType(
+    {"push.force": "deny"}
+)
+
+# Public compatibility copy. Existing callers retain the documented ``dict``
+# behavior, including JSON serialization, but mutation or rebinding cannot
+# affect the private immutable state used by evaluation.
+HARD_GUARDRAILS: Final[dict[str, str]] = dict(_EVALUATION_HARD_GUARDRAILS)
+"""Inspectable unconditional guardrails; evaluation uses a private copy."""
 
 
 # Capabilities that mutate repo state. The first-write guardrail must not
@@ -42,7 +52,7 @@ def _evaluate_hard_guardrails(
     Conditional guardrails always yield `require_approval`, never `deny`,
     because context can be wrong or stale and a hard block is unrecoverable.
     """
-    if capability in HARD_GUARDRAILS:
+    if capability in _EVALUATION_HARD_GUARDRAILS:
         return PolicyDecision(
             mode="deny",  # only "deny" lives in HARD_GUARDRAILS today
             reason="hard_guardrail",
