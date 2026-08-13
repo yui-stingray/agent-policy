@@ -1,12 +1,13 @@
 # Changelog
 
 Where: `CHANGELOG.md`  
-What: release notes for published `yui-agent-policy` versions.  
-Why: keep PyPI releases auditable while the package is still alpha.
+What: release notes and publication status for `yui-agent-policy` versions.
+Why: keep release history and PyPI publication status auditable while the
+package is still alpha.
 
 ## Unreleased
 
-## 0.1.10 - 2026-08-13
+## 0.1.11 - 2026-08-13
 
 - Made hard guardrail evaluation read private immutable state instead of the
   exported mutable `HARD_GUARDRAILS` dictionary, so public mutation or rebinding
@@ -21,6 +22,18 @@ Why: keep PyPI releases auditable while the package is still alpha.
   redirect-final HTTPS host validation, exclusive file creation, and cleanup
   on success or failure. Also clarified the audit-event v1.1 wrapper-validation
   boundary and added a public issue-data safety reminder.
+- Updated the PyPI publisher action and release-recovery workflow for Core
+  Metadata 2.5 compatibility after the prior publisher rejected valid metadata
+  before upload. Successful historical runs retain their prior recovery contract
+  without requiring later-added attestation jobs or retained artifacts, while
+  legacy lightweight tags and pre-changelog releases are handled explicitly;
+  failed current runs keep the stricter annotated, artifact-bound recovery checks.
+
+## 0.1.10 - 2026-08-13 (tag-only; not published)
+
+- `v0.1.10` is an immutable tag-only failed release attempt. No files were
+  published to PyPI and no GitHub Release was published because the old
+  publisher rejected valid Core Metadata 2.5 before upload.
 
 ## 0.1.9 - 2026-07-18
 

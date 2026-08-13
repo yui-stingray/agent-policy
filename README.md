@@ -4,8 +4,11 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.10` alpha. The core evaluator API is stable for v0.1;
+**Status**: `0.1.11` alpha. The core evaluator API is stable for v0.1;
 additive wrapper helpers may still grow while the package is alpha.
+
+Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
+`0.1.11` for installation and provenance verification.
 
 ## Why
 
@@ -405,24 +408,29 @@ build-only dry run; it skips attestation and publication. Manual `publish=true`
 must run against a `v*` tag ref; running it from a branch fails before build.
 
 After PyPI publication succeeds, the separate
-[`github-release`](.github/workflows/github-release.yml) workflow creates or
-updates the GitHub Release notes from the verified tag commit. Automatic runs
-only proceed when the completed `release.yml` workflow ran for the same peeled
-tag commit. Manual retries accept only exact `vX.Y.Z` tags, require a
-successful completed tag-push `release.yml` run for that same tag commit, and
-first verify that PyPI already lists both the wheel and sdist for the version.
-Start a manual retry from the repository's default branch; the separate `tag`
-input selects the historical release. A dispatch that selects a tag or another
-branch as the workflow ref fails before checkout. The PyPI verifier is checked
-out at the dispatch-time default-branch commit before the job detaches to the
-older release tag, so supported GitHub Release retries for old tags keep using
-the hardened verifier logic. Historical workflow definitions are not changed
-retroactively; do not dispatch this workflow from an older branch or tag.
-Immediately before publication, the job re-fetches the remote tag and requires
-its peeled commit to remain unchanged.
-Manual retry is intentionally unavailable for legacy tags that do not have a
-matching successful tag-push `release.yml` run; backfilling those releases is a
-separate maintainer-reviewed operation.
+[`github-release`](.github/workflows/github-release.yml) workflow creates the
+GitHub Release notes from the verified tag commit, or verifies that an existing
+Release is already public and asset-free. The automatic path proceeds only
+after a fully successful tag-push `release.yml` run for the same annotated tag
+object and peeled commit.
+
+Manual recovery must be dispatched from the repository's default branch for an
+exact `vX.Y.Z` tag. Successful `0.1.1` through `0.1.9` tag-push runs use the
+bounded historical path when their build and publish jobs succeeded and PyPI exposes the exact expected,
+non-yanked wheel and sdist. Historical releases do not require retained workflow
+artifacts or an attestation job that did not yet exist; the historical path also
+accepts the repository's `v0.1.6` legacy lightweight tag when its exact commit is
+unchanged. Other successful versions must match the full current job topology
+and use an annotated tag. If a historical tagged tree predates `CHANGELOG.md`, a newly created Release
+uses a fixed provenance-only recovery note rather than invented feature notes.
+A failed current tag-push run is recoverable only from an annotated tag and only
+when the build, attestation, publisher step, retained artifact, and matching
+PyPI wheel/sdist byte evidence are all proven.
+When automatic run selection is ambiguous, the optional `release_run_id` input
+selects the exact run. Recovery fails closed when evidence required for the
+selected path is unavailable, ambiguous, or inconsistent. It never moves tags
+or reuploads distributions; immediately before creating or accepting the
+GitHub Release, it rechecks that the remote tag is unchanged.
 
 The release build creates GitHub artifact attestations for `dist/*` before the
 publish job downloads those files. PyPI Trusted Publishing and the PyPA
@@ -431,7 +439,7 @@ provenance and integrity evidence for a specific artifact and workflow
 identity. They do not prove code correctness, dependency safety, maintainer
 approval, absence of secrets, or policy compliance.
 
-To verify the GitHub provenance for downloaded `0.1.10` artifacts, check the
+To verify the GitHub provenance for downloaded `0.1.11` artifacts, check the
 tag, repository, and signer workflow explicitly:
 
 ```bash
@@ -447,7 +455,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-version = "0.1.10"
+version = "0.1.11"
 target = Path(sys.argv[1])
 request_timeout_seconds = 20
 metadata_url = f"https://pypi.org/pypi/yui-agent-policy/{version}/json"
@@ -500,14 +508,14 @@ for filename in sorted(expected):
         with (target / filename).open("xb") as destination:
             shutil.copyfileobj(response, destination)
 PY
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.10-py3-none-any.whl" \
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.11-py3-none-any.whl" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.10
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.10.tar.gz" \
+  --source-ref refs/tags/v0.1.11
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.11.tar.gz" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.10
+  --source-ref refs/tags/v0.1.11
 )
 ```
 

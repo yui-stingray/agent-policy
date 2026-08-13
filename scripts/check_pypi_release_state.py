@@ -46,7 +46,9 @@ def fetch_pypi_release(project_name: str, version: str) -> dict[str, Any] | None
         raise
 
 
-def check_release_state(project_name: str, version: str, pypi_data: dict[str, Any] | None) -> tuple[bool, str]:
+def check_release_state(
+    project_name: str, version: str, pypi_data: dict[str, Any] | None
+) -> tuple[bool, str]:
     """Return whether a release may proceed and a human-readable reason."""
     if pypi_data is None:
         return (
@@ -62,7 +64,9 @@ def check_release_state(project_name: str, version: str, pypi_data: dict[str, An
     return True, f"PyPI project exists; latest={latest}, candidate={version}"
 
 
-def release_files(pypi_data: dict[str, Any] | None) -> list[tuple[str, str, bool]] | None:
+def release_files(
+    pypi_data: dict[str, Any] | None,
+) -> list[tuple[str, str, bool]] | None:
     """Return filename, package type, and yanked state from exact-release JSON."""
     if pypi_data is None:
         return None
@@ -105,29 +109,55 @@ def require_release_present(
     """Return whether PyPI has exactly the expected non-yanked release files."""
     files = release_files(pypi_data)
     if files is None:
-        return False, f"PyPI release files do not match expected set: {project_name}=={version}"
-    observed = sorted((filename, package_type) for filename, package_type, _yanked in files)
+        return (
+            False,
+            f"PyPI release files do not match expected set: {project_name}=={version}",
+        )
+    observed = sorted(
+        (filename, package_type) for filename, package_type, _yanked in files
+    )
     expected = sorted(expected_release_files(project_name, version))
     if observed != expected:
-        return False, f"PyPI release files do not match expected set: {project_name}=={version}"
+        return (
+            False,
+            f"PyPI release files do not match expected set: {project_name}=={version}",
+        )
     if any(yanked for _filename, _package_type, yanked in files):
         return False, f"PyPI release files are yanked: {project_name}=={version}"
-    return True, f"PyPI release present: {project_name}=={version}; exact wheel and sdist found"
+    return (
+        True,
+        f"PyPI release present: {project_name}=={version}; exact wheel and sdist found",
+    )
 
 
 def main(argv: list[str]) -> int:
     if len(argv) not in {1, 3} or (len(argv) == 3 and argv[1] != "--require-present"):
-        print("usage: check_pypi_release_state.py [--require-present VERSION]", file=sys.stderr)
+        print(
+            "usage: check_pypi_release_state.py [--require-present VERSION]",
+            file=sys.stderr,
+        )
         return 2
 
-    project_name, declared_version = load_project_metadata(Path("pyproject.toml"))
-    if len(argv) == 3:
-        pypi_data = fetch_pypi_release(project_name, argv[2])
-        ok, message = require_release_present(project_name, argv[2], pypi_data)
-    else:
-        # Avoid caching an exact-version 404 immediately before Trusted Publishing.
-        pypi_data = fetch_pypi_project(project_name)
-        ok, message = check_release_state(project_name, declared_version, pypi_data)
+    try:
+        project_name, declared_version = load_project_metadata(Path("pyproject.toml"))
+        if len(argv) == 3:
+            pypi_data = fetch_pypi_release(project_name, argv[2])
+            ok, message = require_release_present(project_name, argv[2], pypi_data)
+        else:
+            # Avoid caching an exact-version 404 immediately before Trusted Publishing.
+            pypi_data = fetch_pypi_project(project_name)
+            ok, message = check_release_state(project_name, declared_version, pypi_data)
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        urllib.error.URLError,
+    ):
+        # Network exception strings can contain raw artifact URLs or local paths.
+        print("PyPI release state could not be verified", file=sys.stderr)
+        return 1
     stream = sys.stdout if ok else sys.stderr
     print(message, file=stream)
     return 0 if ok else 1

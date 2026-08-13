@@ -6,6 +6,7 @@ Why: keep immutable-version checks predictable without live network calls.
 from __future__ import annotations
 
 import importlib.util
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -188,7 +189,10 @@ def test_require_present_rejects_project_level_release_shape() -> None:
                         "filename": "yui_agent_policy-0.1.7-py3-none-any.whl",
                         "packagetype": "bdist_wheel",
                     },
-                    {"filename": "yui_agent_policy-0.1.7.tar.gz", "packagetype": "sdist"},
+                    {
+                        "filename": "yui_agent_policy-0.1.7.tar.gz",
+                        "packagetype": "sdist",
+                    },
                 ]
             }
         },
@@ -209,7 +213,9 @@ def test_require_present_rejects_project_level_release_shape() -> None:
         {"filename": "unexpected.whl", "packagetype": "bdist_wheel", "yanked": "false"},
     ],
 )
-def test_require_present_rejects_malformed_additional_file(malformed_file: object) -> None:
+def test_require_present_rejects_malformed_additional_file(
+    malformed_file: object,
+) -> None:
     expected_files = [
         {
             "filename": "yui_agent_policy-0.1.7-py3-none-any.whl",
@@ -245,7 +251,9 @@ def test_main_uses_exact_release_endpoint_for_presence_check(
     monkeypatch.setattr(
         MODULE,
         "fetch_pypi_project",
-        lambda _project: pytest.fail("project endpoint must not serve post-release checks"),
+        lambda _project: pytest.fail(
+            "project endpoint must not serve post-release checks"
+        ),
     )
     observed: list[tuple[str, str]] = []
 
@@ -268,7 +276,9 @@ def test_main_uses_exact_release_endpoint_for_presence_check(
 
     monkeypatch.setattr(MODULE, "fetch_pypi_release", fake_fetch_release)
 
-    assert MODULE.main(["check_pypi_release_state.py", "--require-present", "0.1.8"]) == 0
+    assert (
+        MODULE.main(["check_pypi_release_state.py", "--require-present", "0.1.8"]) == 0
+    )
     assert observed == [("yui-agent-policy", "0.1.8")]
     assert "exact wheel and sdist found" in capsys.readouterr().out
 
@@ -284,7 +294,9 @@ def test_main_keeps_project_endpoint_for_pre_upload_check(
     monkeypatch.setattr(
         MODULE,
         "fetch_pypi_release",
-        lambda _project, _version: pytest.fail("release endpoint must not be primed before upload"),
+        lambda _project, _version: pytest.fail(
+            "release endpoint must not be primed before upload"
+        ),
     )
     monkeypatch.setattr(
         MODULE,
@@ -294,3 +306,29 @@ def test_main_keeps_project_endpoint_for_pre_upload_check(
 
     assert MODULE.main(["check_pypi_release_state.py"]) == 0
     assert "candidate=0.1.10" in capsys.readouterr().out
+
+
+def test_main_sanitizes_network_failures(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw_url = "https://files.pythonhosted.org/packages/private-token.whl"
+    monkeypatch.setattr(
+        MODULE,
+        "load_project_metadata",
+        lambda _path: ("yui-agent-policy", "0.1.11"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "fetch_pypi_release",
+        lambda _project, _version: (_ for _ in ()).throw(
+            urllib.error.URLError(raw_url)
+        ),
+    )
+
+    assert (
+        MODULE.main(["check_pypi_release_state.py", "--require-present", "0.1.11"]) == 1
+    )
+    captured = capsys.readouterr()
+    assert "could not be verified" in captured.err
+    assert raw_url not in captured.err
+    assert "private-token.whl" not in captured.err

@@ -20,7 +20,7 @@ PINNED_ACTIONS = {
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
-    "pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b",
+    "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
 }
 
 
@@ -67,7 +67,7 @@ def test_release_preflight_requires_current_master_push_ci_success() -> None:
     assert "git fetch --no-tags origin master:refs/remotes/origin/master" in workflow
     assert "--workflow ci.yml" in workflow
     assert "--branch master" in workflow
-    assert "--commit \"$GITHUB_SHA\"" in workflow
+    assert '--commit "$GITHUB_SHA"' in workflow
     assert "--event push" in workflow
     assert "--status completed" in workflow
     assert "python scripts/check_release_source.py" in workflow
@@ -79,7 +79,9 @@ def test_release_attests_only_publish_paths_between_build_and_publish() -> None:
     publish_start = workflow.index("\n  publish:\n", attest_start) + 1
     attest_job = workflow[attest_start:publish_start]
     attest = "uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763"
-    download = "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+    download = (
+        "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+    )
     upload = "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     assert workflow.index(upload) < attest_start
     assert attest_job.index(download) < attest_job.index(attest)
@@ -97,9 +99,11 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
     build_start = workflow.index("\n  build:\n") + 1
     attest_start = workflow.index("\n  attest:\n", build_start) + 1
     publish_start = workflow.index("\n  publish:\n", attest_start) + 1
+    verify_start = workflow.index("\n  verify-published:\n", publish_start) + 1
     build_job = workflow[build_start:attest_start]
     attest_job = workflow[attest_start:publish_start]
-    publish_job = workflow[publish_start:]
+    publish_job = workflow[publish_start:verify_start]
+    verify_job = workflow[verify_start:]
     assert "permissions:\n  actions: read\n  contents: read" in workflow
     assert "id-token: write" not in build_job
     assert "attestations: write" not in build_job
@@ -111,20 +115,53 @@ def test_release_permissions_keep_oidc_scoped_to_publish_and_attestation() -> No
     assert "id-token: write" in publish_job
     assert "contents: read" in publish_job
     assert "attestations: write" not in publish_job
+    assert "needs: publish" in verify_job
+    assert "# Read-only post-publication verification" in verify_job
+    assert "actions: read" in verify_job
+    assert "contents: read" in verify_job
+    assert "id-token: write" not in verify_job
+    assert "attestations: write" not in verify_job
 
 
-def test_release_publish_checks_exact_file_set_before_install_smoke() -> None:
+def test_release_publisher_is_terminal_and_uses_reviewed_v1_14_2_identity() -> None:
     workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
-    publish_job = workflow[workflow.index("\n  publish:\n") :]
+    publish_start = workflow.index("\n  publish:\n")
+    verify_start = workflow.index("\n  verify-published:\n", publish_start)
+    publish_job = workflow[publish_start:verify_start]
 
-    exact_check = 'python scripts/check_pypi_release_state.py --require-present "$version"'
+    publisher = (
+        "uses: pypa/gh-action-pypi-publish@"
+        "dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2"
+    )
+    assert "Reviewed identity: v1.14.2" in publish_job
+    assert "Metadata-Version 2.5 compatibility" in publish_job
+    assert publisher in publish_job
+    assert publish_job.rstrip().endswith(publisher)
+    assert "actions/setup-python@" not in publish_job
+    assert "check_pypi_release_state.py" not in publish_job
+    assert "pip install" not in publish_job
+
+
+def test_release_verifies_exact_file_set_and_install_after_publish_without_oidc() -> (
+    None
+):
+    workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
+    verify_job = workflow[workflow.index("\n  verify-published:\n") :]
+
+    exact_check = (
+        'python scripts/check_pypi_release_state.py --require-present "$version"'
+    )
     install_smoke = 'python -m pip install --no-cache-dir --target "$target"'
-    assert exact_check in publish_job
-    assert install_smoke in publish_job
-    assert publish_job.index(exact_check) < publish_job.index(install_smoke)
-    assert "for attempt in {1..10}; do" in publish_job
-    assert "waiting for propagation" in publish_job
-    assert "contents: read\n      id-token: write" in publish_job
+    assert exact_check in verify_job
+    assert (
+        'python -m pip install --quiet --no-cache-dir --target "$target"' in verify_job
+    )
+    assert verify_job.index(exact_check) < verify_job.index("python -m pip install")
+    assert "for attempt in {1..10}; do" in verify_job
+    assert "waiting for propagation" in verify_job
+    assert "needs: publish" in verify_job
+    assert "id-token: write" not in verify_job
+    assert install_smoke not in verify_job
 
 
 def test_github_release_does_not_interpolate_manual_tag_inside_shell_body() -> None:
@@ -144,54 +181,208 @@ def test_github_release_manual_retry_uses_current_default_branch_verifier() -> N
     default_branch_guard = workflow.index("Require default branch for manual retry")
     checkout = workflow.index("uses: actions/checkout@")
     tag_resolution = workflow.index("Resolve release tag")
-    pypi_check = workflow.index("Verify PyPI release is present")
-    assert default_branch_guard < checkout < tag_resolution < pypi_check
+    recovery_check = workflow.index(
+        "Verify exact manual recovery run and publication evidence"
+    )
+    assert default_branch_guard < checkout < tag_resolution < recovery_check
     assert "DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}" in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}" ]; then' in workflow
     assert "manual GitHub Release retry must run from the default branch" in workflow
     assert "ref: ${{ github.sha }}" in workflow
     assert "not $GITHUB_REF" not in workflow
+    assert "release_run_id:" in workflow
+    run_input = workflow[
+        workflow.index("release_run_id:") : workflow.index("workflow_run:")
+    ]
+    assert "required: false" in run_input
+    assert "default: ''" in run_input
 
 
 def test_github_release_verifies_peeled_tag_sha_against_release_source() -> None:
     workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
 
-    assert 'tag_sha="$(git rev-parse -q --verify "refs/tags/${tag}^{commit}")"' in workflow
-    assert "echo \"sha=${tag_sha}\"" in workflow
-    assert "Verify release source run" in workflow
+    assert '"refs/tags/${tag}:${source_tag_ref}" >/dev/null 2>&1' in workflow
+    assert (
+        'tag_object_sha="$(git rev-parse -q --verify "$source_tag_ref" 2>/dev/null)"'
+        in workflow
+    )
+    assert (
+        'tag_object_type="$(git cat-file -t "$tag_object_sha" 2>/dev/null)"' in workflow
+    )
+    assert (
+        'if [ "$tag_object_type" != "tag" ] && [ "$tag_object_type" != "commit" ]; then'
+        in workflow
+    )
+    assert 'echo "tag_object_sha=${tag_object_sha}"' in workflow
+    assert 'echo "tag_object_type=${tag_object_type}"' in workflow
+    assert (
+        'tag_sha="$(git rev-parse -q --verify "${source_tag_ref}^{commit}" 2>/dev/null)"'
+        in workflow
+    )
+    assert 'echo "sha=${tag_sha}"' in workflow
+    assert "Verify successful automatic release source" in workflow
+    assert 'if [ "$TAG_OBJECT_TYPE" != "tag" ]; then' in workflow
+    assert "automatic GitHub Release requires an annotated release tag" in workflow
     assert 'if [ "$RELEASE_SHA" != "$WORKFLOW_RUN_HEAD_SHA" ]; then' in workflow
-    assert "--workflow release.yml" in workflow
-    assert '--branch "$RELEASE_TAG"' in workflow
-    assert '--commit "$RELEASE_SHA"' in workflow
-    assert "--event push" in workflow
-    assert "--status completed" in workflow
-    assert 'select(.conclusion == "success")' in workflow
     assert "actions: read\n  contents: write" in workflow
 
 
-def test_github_release_checks_pypi_before_detaching_for_release_notes() -> None:
+def test_github_release_manual_recovery_uses_exact_run_and_structured_verifier() -> (
+    None
+):
     workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
 
-    pypi_check = workflow.index("Verify PyPI release is present")
-    detach = workflow.index("Detach checkout to release commit")
-    changelog = workflow.index("Extract release notes")
-    github_release = workflow.index("Create or update GitHub release")
-    assert pypi_check < detach < changelog < github_release
-    assert 'python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"' in workflow
+    recovery = workflow.index(
+        "Verify exact manual recovery run and publication evidence"
+    )
+    release_step = workflow.index("Create or verify GitHub release")
+    assert recovery < release_step
+    assert "INPUT_RUN_ID: ${{ inputs.release_run_id }}" in workflow
+    assert (
+        '[ -n "$INPUT_RUN_ID" ] && [[ ! "$INPUT_RUN_ID" =~ ^[1-9][0-9]*$ ]]' in workflow
+    )
+    assert "Resolve exact manual recovery run" in workflow
+    assert "actions/workflows/release.yml/runs" in workflow
+    assert "verify_release_recovery.py select-run" in workflow
+    assert 'run_id="$(python scripts/verify_release_recovery.py select-run' in workflow
+    assert "RELEASE_RUN_ID: ${{ steps.recovery.outputs.run_id }}" in workflow
+    assert 'actions/runs/${RELEASE_RUN_ID}"' in workflow
+    assert (
+        "actions/runs/${RELEASE_RUN_ID}/attempts/${run_attempt}/jobs?per_page=100"
+        in workflow
+    )
+    assert "actions/runs/${RELEASE_RUN_ID}/artifacts?per_page=100" in workflow
+    assert (
+        '"repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip"' in workflow
+    )
+    assert 'if [ "$recovery_result" = "historical-success" ]; then' in workflow
+    assert '[ "$RELEASE_TAG" != "v0.1.6" ]' in workflow
+    assert "lightweight tag recovery is not allowed for this release" in workflow
+    assert 'echo "kind=historical-success" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'elif [ "$recovery_result" = "current-success" ]; then' in workflow
+    assert "current release recovery requires an annotated tag" in workflow
+    assert 'echo "kind=current-success" >> "$GITHUB_OUTPUT"' in workflow
+    assert "failed current release recovery requires an annotated tag" in workflow
+    assert 'artifact_id="$recovery_result"' in workflow
+    assert 'echo "kind=failed-current" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'gh run download "$RELEASE_RUN_ID"' not in workflow
+    assert "verify_release_recovery.py verify-artifact" in workflow
+    assert "verify_release_recovery.py verify-run-stable" in workflow
+    assert '--run-id "$RELEASE_RUN_ID"' in workflow
+    assert '--tag "$RELEASE_TAG"' in workflow
+    assert '--sha "$RELEASE_SHA"' in workflow
+    assert "gh run list" not in workflow
+
+
+def test_github_release_checks_publication_evidence_before_release_notes() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    recovery_check = workflow.index(
+        "Verify exact manual recovery run and publication evidence"
+    )
+    pypi_check = workflow.index("Verify exact PyPI release is present")
+    github_release = workflow.index("Create or verify GitHub release")
+    assert recovery_check < pypi_check < github_release
+    assert (
+        'python scripts/check_pypi_release_state.py --require-present "$RELEASE_VERSION"'
+        in workflow
+    )
     assert "for attempt in {1..5}; do" in workflow
     assert "waiting for API propagation" in workflow
     assert "sleep 10" in workflow
-    assert 'git checkout --detach "$RELEASE_SHA"' in workflow
-    assert 'python scripts/check_changelog.py --version "$RELEASE_VERSION" --write-notes release-notes.md' in workflow
+    assert 'git checkout --detach "$RELEASE_SHA"' not in workflow
+    assert 'git show "${RELEASE_SHA}:CHANGELOG.md" > release-changelog.md' in workflow
+    assert "python scripts/check_changelog.py \\" in workflow
+    assert "--changelog release-changelog.md" in workflow
+
+
+def test_historical_recovery_keeps_current_verifier_and_bounds_note_fallback() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    release_step = workflow.index("Create or verify GitHub release")
+    publication = workflow[release_step:]
+    assert "git checkout --detach" not in workflow
+    assert "verify_release_recovery.py release-state" in publication
+    assert publication.index("verify_release_recovery.py release-state") < (
+        publication.index('git show "${RELEASE_SHA}:CHANGELOG.md"')
+    )
+    assert "python scripts/check_changelog.py" in publication
+    assert '[ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]' in publication
+    assert '[ "$RECOVERY_KIND" = "historical-success" ]' in publication
+    assert "The tagged tree predates CHANGELOG.md." in publication
+
+
+def test_github_release_automatic_path_requires_fully_successful_release_run() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    assert "github.event_name == 'workflow_run'" in workflow
+    assert "github.event.workflow_run.event == 'push'" in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert "github.event.workflow_run.conclusion == 'failure'" not in workflow
+    assert r'[[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' in workflow
+    assert "Verify successful automatic release source" in workflow
+    assert "Verify current automatic release topology" in workflow
+    assert "verify_release_recovery.py validate-run" in workflow
+    assert "--mode automatic" in workflow
+    assert 'if [ "$RELEASE_SHA" != "$WORKFLOW_RUN_HEAD_SHA" ]; then' in workflow
+
+
+def test_successful_release_workflow_dispatch_dry_run_cannot_publish_release() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+    job_start = workflow.index("  publish-github-release:")
+    job_header = workflow[job_start : workflow.index("    runs-on:", job_start)]
+
+    assert "github.event_name == 'workflow_dispatch' ||" in job_header
+    assert "github.event_name == 'workflow_run'" in job_header
+    assert "github.event.workflow_run.event == 'push'" in job_header
+    assert "github.event.workflow_run.conclusion == 'success'" in job_header
+
+
+def test_github_release_has_no_publication_command_before_all_checks() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+
+    release_step = workflow.index("Create or verify GitHub release")
+    assert "gh release create" not in workflow[:release_step]
+    assert "gh release edit" not in workflow[:release_step]
+    assert workflow.index("verify_release_recovery.py") < release_step
+    assert (
+        workflow.index("check_pypi_release_state.py --require-present") < release_step
+    )
 
 
 def test_github_release_rechecks_remote_tag_immediately_before_publication() -> None:
     workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
 
-    publish_step = workflow[workflow.index("Create or update GitHub release") :]
-    assert 'git fetch --force --no-tags origin "refs/tags/${TAG_NAME}:${remote_tag_ref}"' in publish_step
-    assert 'remote_tag_sha="$(git rev-parse "${remote_tag_ref}^{commit}")"' in publish_step
-    assert 'if [ "$remote_tag_sha" != "$RELEASE_SHA" ]; then' in publish_step
-    assert publish_step.index("release tag changed after verification") < publish_step.index(
-        'gh release view "$TAG_NAME"'
+    publish_step = workflow[workflow.index("Create or verify GitHub release") :]
+    assert "git fetch --force --no-tags origin" in publish_step
+    assert '"refs/tags/${TAG_NAME}:${remote_tag_ref}" >/dev/null 2>&1' in publish_step
+    assert (
+        'remote_tag_object_sha="$(git rev-parse -q --verify "$remote_tag_ref" 2>/dev/null)"'
+        in publish_step
+    )
+    assert (
+        'remote_tag_object_type="$(git cat-file -t "$remote_tag_object_sha" 2>/dev/null)"'
+        in publish_step
+    )
+    assert (
+        'remote_tag_sha="$(git rev-parse -q --verify "${remote_tag_ref}^{commit}" 2>/dev/null)"'
+        in publish_step
+    )
+    assert 'remote_tag_object_sha" != "$TAG_OBJECT_SHA' in publish_step
+    assert 'remote_tag_object_type" != "$TAG_OBJECT_TYPE' in publish_step
+    assert 'remote_tag_sha" != "$RELEASE_SHA' in publish_step
+    assert publish_step.index(
+        "release tag object or commit changed after verification"
+    ) < publish_step.index("verify_release_recovery.py release-state")
+
+
+def test_existing_release_is_validated_and_clean_public_state_is_a_noop() -> None:
+    workflow = WORKFLOWS["github-release"].read_text(encoding="utf-8")
+    publish_step = workflow[workflow.index("Create or verify GitHub release") :]
+
+    assert "gh release edit" not in workflow
+    assert "verify_release_recovery.py release-state" in publish_step
+    assert 'if [ "$release_state" = "present" ]; then' in publish_step
+    assert publish_step.index('if [ "$release_state" = "present" ]; then') < (
+        publish_step.index('gh release create "$TAG_NAME"')
     )
