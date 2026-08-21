@@ -259,6 +259,8 @@ shell = "require_approval"
 
 Unknown top-level fields or typos inside `[[repo_policy]]` fail loudly
 with a `pydantic.ValidationError` — there is no silent degradation.
+`ownership_class` is a closed optional gate: it accepts only `internal` or
+`external`; omit it (or use `None` in Python) to match either ownership class.
 
 ## Wrapper pattern
 

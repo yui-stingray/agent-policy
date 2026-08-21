@@ -6,14 +6,16 @@ Why: approval wrappers need stable evidence without moving state into the
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import json
 import math
+from types import MappingProxyType
 
 import pytest
 
 from agent_policy import (
     PolicyDecision,
+    PolicyAuditEvent,
     audit_event_asdict,
     audit_event_to_json,
     build_audit_event,
@@ -47,6 +49,60 @@ def test_build_audit_event_copies_and_freezes_context() -> None:
         event.context["new"] = "blocked"  # type: ignore[index]
     with pytest.raises(FrozenInstanceError):
         event.repo = "other/repo"  # type: ignore[misc]
+
+
+def test_direct_policy_audit_event_constructor_copies_and_freezes_context() -> None:
+    context = {"ownership_class": "internal", "nested": {"items": ["one"]}}
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="repo_policy",
+        matched_repo="acme/app",
+    )
+
+    event = PolicyAuditEvent(
+        repo="acme/app",
+        capability="shell",
+        context=MappingProxyType(context),
+        decision=decision,
+    )
+    context["ownership_class"] = "external"
+    context["nested"]["items"].append("two")  # type: ignore[index]
+
+    assert audit_event_asdict(event)["context"] == {
+        "nested": {"items": ["one"]},
+        "ownership_class": "internal",
+    }
+    with pytest.raises(TypeError):
+        event.context["new"] = "blocked"  # type: ignore[index]
+
+
+def test_frozen_nested_context_can_be_reused_by_value_object_operations() -> None:
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="repo_policy",
+        matched_repo="acme/app",
+    )
+    event = PolicyAuditEvent(
+        repo="acme/app",
+        capability="shell",
+        context={"nested": {"items": ["one"]}},
+        decision=decision,
+    )
+
+    replaced = replace(event, capability="write")
+    reconstructed = PolicyAuditEvent(
+        repo=event.repo,
+        capability=event.capability,
+        context=event.context,
+        decision=event.decision,
+    )
+
+    assert audit_event_asdict(replaced)["context"] == {
+        "nested": {"items": ["one"]}
+    }
+    assert audit_event_asdict(reconstructed)["context"] == {
+        "nested": {"items": ["one"]}
+    }
 
 
 def test_audit_event_asdict_includes_decision_and_optional_fields() -> None:
@@ -160,3 +216,38 @@ def test_audit_event_rejects_non_json_context_values() -> None:
                 context={"bad": value},
                 decision=decision,
             )
+
+
+def test_direct_policy_audit_event_constructor_rejects_non_json_context_values() -> None:
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="default_mode",
+        matched_repo=None,
+    )
+
+    with pytest.raises(TypeError, match="JSON-compatible"):
+        PolicyAuditEvent(
+            repo="acme/app",
+            capability="write",
+            context={"bad": object()},
+            decision=decision,
+        )
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_direct_policy_audit_event_constructor_rejects_nonfinite_context_values(
+    value: float,
+) -> None:
+    decision = PolicyDecision(
+        mode="require_approval",
+        reason="default_mode",
+        matched_repo=None,
+    )
+
+    with pytest.raises(TypeError, match="finite JSON numbers"):
+        PolicyAuditEvent(
+            repo="acme/app",
+            capability="write",
+            context={"bad": value},
+            decision=decision,
+        )

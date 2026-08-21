@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import agent_policy.guardrails as guardrails_module
 from agent_policy import (
@@ -274,6 +275,76 @@ def test_ownership_class_match_uses_repo_policy() -> None:
     assert decision.matched_repo == "acme/app"
 
 
+@pytest.mark.parametrize("ownership_class", ["internal", "external", None])
+def test_repo_policy_accepts_closed_ownership_class_vocabulary(
+    ownership_class: str | None,
+) -> None:
+    policy = RepoPolicy(
+        repo="acme/app",
+        ownership_class=ownership_class,
+        capabilities={"push": "auto_allow"},
+    )
+
+    assert policy.ownership_class == ownership_class
+
+
+def test_repo_policy_rejects_misspelled_ownership_class() -> None:
+    with pytest.raises(ValidationError, match="ownership_class"):
+        RepoPolicy(
+            repo="acme/app",
+            ownership_class="interanl",
+            capabilities={"push": "auto_allow"},
+        )
+
+
+def test_repo_policy_rejects_misspelled_ownership_class_on_assignment() -> None:
+    policy = PolicyMatrix(
+        default_mode="auto_allow",
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class="internal",
+                capabilities={"shell": "deny"},
+            )
+        ],
+    )
+
+    with pytest.raises(ValidationError, match="ownership_class"):
+        policy.repo_policy[0].ownership_class = "interanl"  # type: ignore[assignment]
+
+    decision = evaluate(
+        policy,
+        repo="acme/app",
+        capability="shell",
+        context={"ownership_class": "internal"},
+    )
+    assert decision.mode == "deny"
+    assert decision.reason == "repo_policy"
+
+
+def test_none_ownership_class_remains_a_repo_policy_wildcard() -> None:
+    policy = PolicyMatrix(
+        default_mode="require_approval",
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class=None,
+                capabilities={"push": "auto_allow"},
+            )
+        ],
+    )
+
+    decision = evaluate(
+        policy,
+        repo="acme/app",
+        capability="push",
+        context={"ownership_class": "external"},
+    )
+
+    assert decision.mode == "auto_allow"
+    assert decision.reason == "repo_policy"
+
+
 # ---------------------------------------------------------------------------
 # Caller convenience: dict input + frozen output
 # ---------------------------------------------------------------------------
@@ -290,6 +361,24 @@ def test_evaluate_accepts_plain_dict_policy() -> None:
     decision = evaluate(policy, repo="acme/app", capability="commit")
 
     assert decision.mode == "auto_allow"
+
+
+def test_evaluate_rejects_misspelled_ownership_before_auto_allow_default() -> None:
+    with pytest.raises(ValidationError, match="ownership_class"):
+        evaluate(
+            {
+                "default_mode": "auto_allow",
+                "repo_policy": [
+                    {
+                        "repo": "acme/app",
+                        "ownership_class": "interanl",
+                        "capabilities": {"commit": "auto_allow"},
+                    }
+                ],
+            },
+            repo="acme/app",
+            capability="push",
+        )
 
 
 def test_policy_decision_is_frozen() -> None:
@@ -348,4 +437,23 @@ def test_load_policy_file_rejects_unknown_field(tmp_path: Path) -> None:
     )
 
     with pytest.raises(Exception):  # pydantic.ValidationError
+        load_policy_file(toml_path)
+
+
+def test_load_policy_file_rejects_misspelled_ownership_before_auto_allow_default(
+    tmp_path: Path,
+) -> None:
+    toml_path = tmp_path / "bad-ownership.toml"
+    toml_path.write_text(
+        """
+default_mode = "auto_allow"
+
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "interanl"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="ownership_class"):
         load_policy_file(toml_path)

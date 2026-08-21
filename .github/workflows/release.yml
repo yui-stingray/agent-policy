@@ -43,10 +43,10 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
              && [ "${{ inputs.publish }}" = "true" ] \
              && [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
-            echo "::error::manual publish=true must be run against a v* tag ref, not ${GITHUB_REF}"
+            echo "::error::manual publish=true must be run against a v* tag ref"
             exit 1
           fi
-          echo "release request accepted for ${GITHUB_REF}"
+          echo "release request accepted"
 
   build:
     name: build sdist + wheel
@@ -71,32 +71,61 @@ jobs:
       - name: Check PyPI release state
         if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
         run: python scripts/check_pypi_release_state.py
-      - name: Require current protected master with successful CI
+      - name: Require annotated tag at current protected master with successful CI
         if: github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin master:refs/remotes/origin/master
+          tag_ref="$GITHUB_REF"
+          if [[ ! "$tag_ref" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release source must be an exact vX.Y.Z tag ref"
+            exit 1
+          fi
+          tag_object_sha="$(git rev-parse -q --verify "$tag_ref" 2>/dev/null)" || {
+            echo "::error::release tag object could not be resolved"
+            exit 1
+          }
+          tag_object_type="$(git cat-file -t "$tag_object_sha" 2>/dev/null)" || {
+            echo "::error::release tag object type could not be resolved"
+            exit 1
+          }
+          tag_sha="$(git rev-parse -q --verify "${tag_ref}^{commit}" 2>/dev/null)" || {
+            echo "::error::release tag commit could not be resolved"
+            exit 1
+          }
+          if ! git fetch --no-tags origin master:refs/remotes/origin/master >/dev/null 2>&1; then
+            echo "::error::current origin/master could not be fetched"
+            exit 1
+          fi
+          master_sha="$(git rev-parse -q --verify "origin/master^{commit}" 2>/dev/null)" || {
+            echo "::error::current origin/master commit could not be resolved"
+            exit 1
+          }
+          if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::release tag commit does not match workflow source"
+            exit 1
+          fi
           mapfile -t conclusions < <(
             gh run list \
               --repo "$GITHUB_REPOSITORY" \
               --workflow ci.yml \
               --branch master \
-              --commit "$GITHUB_SHA" \
+              --commit "$tag_sha" \
               --event push \
               --status completed \
               --limit 10 \
               --json conclusion \
-              --jq '.[].conclusion'
+              --jq '.[].conclusion' 2>/dev/null
           )
           args=()
           for conclusion in "${conclusions[@]}"; do
             args+=(--ci-conclusion "$conclusion")
           done
           python scripts/check_release_source.py \
-            --tag-sha "$GITHUB_SHA" \
-            --master-sha "$(git rev-parse origin/master)" \
+            --tag-object-type "$tag_object_type" \
+            --tag-sha "$tag_sha" \
+            --master-sha "$master_sha" \
             "${args[@]}"
       - name: Check changelog entry
         run: python scripts/check_changelog.py
