@@ -1,4 +1,4 @@
-"""Require a release tag to point at current master with successful CI."""
+"""Require an annotated release tag to point at current master with successful CI."""
 
 from __future__ import annotations
 
@@ -9,10 +9,16 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 def check_release_source(
-    *, tag_sha: str, master_sha: str, ci_conclusions: list[str]
+    *,
+    tag_object_type: str,
+    tag_sha: str,
+    master_sha: str,
+    ci_conclusions: list[str],
 ) -> tuple[bool, str]:
-    """Validate that a release commit is current master with successful CI."""
+    """Validate an annotated release tag's peeled commit and CI state."""
 
+    if tag_object_type != "tag":
+        return False, "release source must be an annotated tag object"
     normalized_tag = tag_sha.strip().lower()
     normalized_master = master_sha.strip().lower()
     if not SHA_PATTERN.fullmatch(normalized_tag) or not SHA_PATTERN.fullmatch(
@@ -30,11 +36,13 @@ def main(argv: list[str] | None = None) -> int:
     """Run the release-source preflight from command-line arguments."""
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--tag-object-type", required=True)
     parser.add_argument("--tag-sha", required=True)
     parser.add_argument("--master-sha", required=True)
     parser.add_argument("--ci-conclusion", action="append", default=[])
     args = parser.parse_args(argv)
     ok, message = check_release_source(
+        tag_object_type=args.tag_object_type,
         tag_sha=args.tag_sha,
         master_sha=args.master_sha,
         ci_conclusions=args.ci_conclusion,

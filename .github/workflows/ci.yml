@@ -56,7 +56,7 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python scripts/check_changelog.py
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Install build + twine
         if: matrix.python-version == '3.12'

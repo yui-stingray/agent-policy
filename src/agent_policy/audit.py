@@ -43,6 +43,16 @@ class PolicyAuditEvent:
     command: str | None = None
     path: str | None = None
 
+    def __post_init__(self) -> None:
+        """Copy, validate, and freeze context at the public construction boundary."""
+        if not isinstance(self.context, Mapping):
+            raise TypeError("context must be a mapping")
+        object.__setattr__(
+            self,
+            "context",
+            MappingProxyType(_freeze_context(self.context)),
+        )
+
 
 def build_audit_event(
     *,
@@ -56,15 +66,14 @@ def build_audit_event(
 ) -> PolicyAuditEvent:
     """Build a copied, top-level immutable audit event.
 
-    `context` is recursively copied and key-sorted so later caller mutations
-    cannot change the event payload and serialized output remains stable.
+    ``PolicyAuditEvent`` performs the recursive copy, validation, and freeze
+    so direct construction has the same behavior.
     """
 
-    frozen_context = MappingProxyType(_freeze_context(context or {}))
     return PolicyAuditEvent(
         repo=repo,
         capability=capability,
-        context=frozen_context,
+        context=context if context is not None else {},
         decision=decision,
         session_id=session_id,
         command=command,
@@ -114,6 +123,10 @@ def _freeze_context(context: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _freeze_json_value(value: Any) -> Any:
+    if isinstance(value, _FrozenObject):
+        return _FrozenObject(tuple(_freeze_context(dict(value.items)).items()))
+    if isinstance(value, _FrozenArray):
+        return _FrozenArray(tuple(_freeze_json_value(item) for item in value.items))
     if isinstance(value, Mapping):
         return _FrozenObject(tuple(_freeze_context(value).items()))
     if isinstance(value, list):

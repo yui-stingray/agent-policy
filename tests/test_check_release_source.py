@@ -15,12 +15,14 @@ SPEC.loader.exec_module(MODULE)
 def test_release_source_requires_current_master_and_successful_ci() -> None:
     sha = "a" * 40
     assert MODULE.check_release_source(
+        tag_object_type="tag",
         tag_sha=sha,
         master_sha=sha,
         ci_conclusions=["failure", "success"],
     ) == (True, "release source is current protected master with successful CI")
 
     ok, message = MODULE.check_release_source(
+        tag_object_type="tag",
         tag_sha=sha,
         master_sha="b" * 40,
         ci_conclusions=["success"],
@@ -29,6 +31,7 @@ def test_release_source_requires_current_master_and_successful_ci() -> None:
     assert message == "release tag must point at the current origin/master commit"
 
     ok, message = MODULE.check_release_source(
+        tag_object_type="tag",
         tag_sha=sha,
         master_sha=sha,
         ci_conclusions=["failure"],
@@ -37,8 +40,38 @@ def test_release_source_requires_current_master_and_successful_ci() -> None:
     assert message == "release commit must have a successful completed CI run"
 
 
+def test_release_source_rejects_lightweight_tag_object() -> None:
+    sha = "a" * 40
+
+    ok, message = MODULE.check_release_source(
+        tag_object_type="commit",
+        tag_sha=sha,
+        master_sha=sha,
+        ci_conclusions=["success"],
+    )
+
+    assert ok is False
+    assert message == "release source must be an annotated tag object"
+
+
+def test_release_source_rejects_noncanonical_tag_object_type_without_echoing_input() -> None:
+    sha = "a" * 40
+
+    ok, message = MODULE.check_release_source(
+        tag_object_type="tag-private",
+        tag_sha=sha,
+        master_sha=sha,
+        ci_conclusions=["success"],
+    )
+
+    assert ok is False
+    assert message == "release source must be an annotated tag object"
+    assert "tag-private" not in message
+
+
 def test_release_source_rejects_invalid_commit_identifiers_without_echoing_inputs() -> None:
     ok, message = MODULE.check_release_source(
+        tag_object_type="tag",
         tag_sha="refs/tags/v0.1.7",
         master_sha="/tmp/repo/.git/refs/remotes/origin/master",
         ci_conclusions=["success"],

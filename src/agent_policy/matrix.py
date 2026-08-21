@@ -13,18 +13,28 @@ Design notes:
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from .decision import Mode
 
 
-class RepoPolicy(BaseModel):
-    """One repo's capability → mode mapping, plus optional ownership gate."""
+OwnershipClass = Literal["internal", "external"]
+"""Closed ownership vocabulary for RepoPolicy gates."""
 
-    model_config = ConfigDict(extra="forbid")
+
+class RepoPolicy(BaseModel):
+    """One repo's capability → mode mapping, plus optional ownership gate.
+
+    ``ownership_class`` accepts only ``internal`` or ``external``. ``None``
+    leaves the entry as an ownership wildcard.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     repo: str
-    ownership_class: str | None = None
+    ownership_class: OwnershipClass | None = None
     capabilities: dict[str, Mode] = Field(default_factory=dict)
 
 

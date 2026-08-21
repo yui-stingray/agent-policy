@@ -63,14 +63,38 @@ def test_checkout_steps_do_not_persist_credentials() -> None:
 
 def test_release_preflight_requires_current_master_push_ci_success() -> None:
     workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
-    assert "Require current protected master with successful CI" in workflow
+    assert "Require annotated tag at current protected master with successful CI" in workflow
+    assert 'tag_ref="$GITHUB_REF"' in workflow
+    assert '[[ ! "$tag_ref" =~ ^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]' in workflow
+    assert (
+        'tag_object_sha="$(git rev-parse -q --verify "$tag_ref" 2>/dev/null)"'
+        in workflow
+    )
+    assert 'tag_object_type="$(git cat-file -t "$tag_object_sha" 2>/dev/null)"' in workflow
+    assert (
+        'tag_sha="$(git rev-parse -q --verify "${tag_ref}^{commit}" 2>/dev/null)"'
+        in workflow
+    )
     assert "git fetch --no-tags origin master:refs/remotes/origin/master" in workflow
+    assert 'master_sha="$(git rev-parse -q --verify "origin/master^{commit}" 2>/dev/null)"' in workflow
+    assert 'if [ "$tag_sha" != "$GITHUB_SHA" ]; then' in workflow
     assert "--workflow ci.yml" in workflow
     assert "--branch master" in workflow
-    assert '--commit "$GITHUB_SHA"' in workflow
+    assert '--commit "$tag_sha"' in workflow
     assert "--event push" in workflow
     assert "--status completed" in workflow
     assert "python scripts/check_release_source.py" in workflow
+    assert '--tag-object-type "$tag_object_type"' in workflow
+    assert '--tag-sha "$tag_sha"' in workflow
+    assert '--master-sha "$master_sha"' in workflow
+    assert "v0.1.6" not in workflow
+
+
+def test_release_workflow_does_not_echo_untrusted_refs_in_request_errors() -> None:
+    workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
+
+    assert "manual publish=true must be run against a v* tag ref, not" not in workflow
+    assert 'echo "release request accepted for ${GITHUB_REF}"' not in workflow
 
 
 def test_release_attests_only_publish_paths_between_build_and_publish() -> None:

@@ -7,6 +7,13 @@ package is still alpha.
 
 ## Unreleased
 
+- Closed `RepoPolicy.ownership_class` to `internal` or `external` (with `None`
+  as the wildcard), and made direct `PolicyAuditEvent(...)` construction copy,
+  validate, and freeze context like `build_audit_event()`.
+- Hardened the primary PyPI release preflight to require an annotated tag and
+  compare its peeled commit with `origin/master` before build or publication.
+- Raised the development pytest floor to `>=9.0.3,<10`.
+
 ## 0.1.11 - 2026-08-13
 
 - Made hard guardrail evaluation read private immutable state instead of the
