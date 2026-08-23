@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 VERSION_HEADING_RE = re.compile(r"^##\s+(?P<version>\d+\.\d+\.\d+)(?:\s+-\s+.*)?$")
+DEVELOPMENT_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+\.dev\d+$")
 
 
 def load_project_version(pyproject_path: Path) -> str:
@@ -29,6 +30,11 @@ def changelog_versions(changelog_path: Path) -> list[str]:
         if match:
             versions.append(match.group("version"))
     return versions
+
+
+def is_development_version(version: str) -> bool:
+    """Return whether version is a PEP 440 development release."""
+    return DEVELOPMENT_VERSION_RE.fullmatch(version) is not None
 
 
 def extract_release_notes(changelog_path: Path, version: str) -> str:
@@ -78,8 +84,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     version = args.version or load_project_version(Path("pyproject.toml"))
+    notes_version = "Unreleased" if is_development_version(version) else version
     try:
-        notes = extract_release_notes(args.changelog, version)
+        notes = extract_release_notes(args.changelog, notes_version)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1

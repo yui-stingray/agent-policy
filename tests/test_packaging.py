@@ -22,6 +22,8 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 README = REPO_ROOT / "README.md"
 PACKAGE_DIR = REPO_ROOT / "src" / "agent_policy"
 SCHEMA_DIR = PACKAGE_DIR / "schemas"
+CURRENT_SOURCE_VERSION = "0.1.12.dev0"
+LATEST_PUBLIC_VERSION = "0.1.11"
 
 
 def _pyproject_version() -> str:
@@ -37,16 +39,25 @@ def test_package_version_matches_pyproject() -> None:
     assert agent_policy.__version__ == _pyproject_version()
 
 
-def test_readme_status_matches_pyproject_version() -> None:
-    # README is the first thing PyPI users see. Keep the advertised alpha
-    # version aligned with the package metadata so release notes do not drift.
-    assert f"**Status**: `{_pyproject_version()}` alpha." in README.read_text(encoding="utf-8")
+def test_unreleased_source_identity_matches_readme_install_contract() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert _pyproject_version() == CURRENT_SOURCE_VERSION
+    assert agent_policy.__version__ == CURRENT_SOURCE_VERSION
+    assert (
+        f"**Status**: Unreleased source `{CURRENT_SOURCE_VERSION}`. "
+        "The latest public PyPI release is"
+    ) in readme
+    assert f"`yui-agent-policy=={LATEST_PUBLIC_VERSION}`" in readme
+    assert readme.count(f"pip install yui-agent-policy=={LATEST_PUBLIC_VERSION}") == 2
+    assert "\npip install yui-agent-policy\n" not in readme
 
 
 def test_readme_provenance_download_uses_expected_local_filenames() -> None:
     readme = README.read_text(encoding="utf-8")
-    version = _pyproject_version()
+    version = LATEST_PUBLIC_VERSION
 
+    assert version != _pyproject_version()
     assert f'version = "{version}"' in readme
     assert readme.count(f"--source-ref refs/tags/v{version}") == 2
     assert "(\nset -euo pipefail\nverify_dir=\"$(mktemp -d" in readme
@@ -93,6 +104,16 @@ def test_readme_provenance_download_uses_expected_local_filenames() -> None:
     artifact_copy = readme.index("shutil.copyfileobj(response, destination)")
     assert metadata_final < metadata_rejection < metadata_parse
     assert artifact_final < artifact_rejection < destination_open < artifact_copy
+
+
+def test_readme_positions_policy_as_optional_runtime_companion() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert "`agent-guard`](https://github.com/yui-stingray/agent-guard) is the standalone" in readme
+    assert "`agent-policy` is an optional advanced runtime companion" in readme
+    assert "It is not required by `agent-guard` or a basic static setup." in readme
+    assert "is a reference integration for projects that intentionally use both tools;" in readme
+    assert "is not required setup." in readme
 
 
 def test_readme_documents_wrapper_contract_summary() -> None:

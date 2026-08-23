@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.11` alpha. The core evaluator API is stable for v0.1;
-additive wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.12.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.11`. The core evaluator API is stable for v0.1; additive
+wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.11` for installation and provenance verification.
@@ -30,44 +31,42 @@ place to answer one question, the same way, every time:
 It does **not** parse shell commands, manage state, or send messages.
 Those belong in the wrapper layer that calls `evaluate`.
 
-## Agent safety toolkit
+## Optional runtime companion
 
-`agent-policy` is one half of a small agent safety toolkit for repositories
-touched by coding agents such as Codex, Claude Code, Aider, and similar tools.
-It answers the runtime authorization question:
-
-> "Given this repo, capability, and context, should the agent be denied,
-> require approval, or be allowed?"
-
-Pair it with [`agent-guard`](https://github.com/yui-stingray/agent-guard),
-which answers the static repository question:
+[`agent-guard`](https://github.com/yui-stingray/agent-guard) is the standalone
+static entry point for repositories touched by coding agents such as Codex,
+Claude Code, Aider, and similar tools. It answers the repository question:
 
 > "Does the repository content still obey the safety rules before hooks, CI,
 > release, or publication?"
 
-The intended split is:
+`agent-policy` is an optional advanced runtime companion for integrations that
+need action-level authorization:
 
-| Layer | Tool | Responsibility |
+> "Given this repo, capability, and context, should the agent be denied,
+> require approval, or be allowed?"
+
+It is not required by `agent-guard` or a basic static setup. When an integration
+needs runtime admission control, it can call `agent-policy` in a hook or wrapper
+before an agent performs a side effect.
+
+| Role | Tool | Responsibility |
 | --- | --- | --- |
-| Runtime admission | `agent-policy` | Decide whether a normalized agent action is `deny`, `require_approval`, or `auto_allow`. |
-| Static repository gate | `agent-guard` | Scan paths, text, API surfaces, and pinned digests for repository safety drift. |
+| Standalone static entry | `agent-guard` | Scan paths, text, API surfaces, and pinned digests for repository safety drift. |
+| Optional advanced runtime companion | `agent-policy` | Decide whether a normalized agent action is `deny`, `require_approval`, or `auto_allow`. |
 
-A practical setup uses `agent-policy` in a shell hook or wrapper before an
-agent performs a side effect, then runs `agent-guard` in CI or pre-release
-checks before the repository is published or merged.
-
-See
 [`agent-safety-toolkit-example`](https://github.com/yui-stingray/agent-safety-toolkit-example)
-for a small public demo that wires the two tools together.
+is a reference integration for projects that intentionally use both tools; it
+is not required setup.
 
 ## Install
 
 ```bash
-pip install yui-agent-policy
+pip install yui-agent-policy==0.1.11
 ```
 
-From a source checkout, install the package in editable mode so both the
-library and `examples/check.py` can resolve `import agent_policy`:
+From this current unreleased source checkout, install the package in editable
+mode so both the library and `examples/check.py` can resolve `import agent_policy`:
 
 ```bash
 pip install -e .
@@ -335,8 +334,9 @@ record schema and CI gates.
 
 ## Examples
 
-See [`examples/`](examples/). Runnable after installing the package
-(`pip install yui-agent-policy`, or `pip install -e .` from a source checkout):
+See [`examples/`](examples/). To run them from this source checkout, install it
+with `pip install -e .`; public users who need the released library should use
+`pip install yui-agent-policy==0.1.11`:
 
 - `policy.toml` — a minimal fail-closed policy with two repos.
 - `ai_resilience_policy.toml` — a safety-oriented vocabulary example for

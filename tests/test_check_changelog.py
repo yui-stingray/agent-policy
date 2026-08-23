@@ -33,11 +33,12 @@ def test_changelog_versions_extract_semver_headings(tmp_path: Path) -> None:
     assert MODULE.changelog_versions(changelog) == ["0.1.4", "0.1.3"]
 
 
-def test_current_project_version_has_changelog_entry() -> None:
+def test_current_project_development_version_uses_unreleased_notes() -> None:
     root = Path(__file__).resolve().parents[1]
     version = MODULE.load_project_version(root / "pyproject.toml")
 
-    assert version in MODULE.changelog_versions(root / "CHANGELOG.md")
+    assert MODULE.is_development_version(version)
+    assert MODULE.extract_release_notes(root / "CHANGELOG.md", "Unreleased")
 
 
 def test_extract_release_notes_returns_selected_body(tmp_path: Path) -> None:
@@ -81,6 +82,31 @@ def test_main_extracts_notes_from_explicit_release_changelog(tmp_path: Path) -> 
         == 0
     )
     assert notes.read_text(encoding="utf-8") == "- Historical release.\n"
+
+
+def test_main_uses_unreleased_notes_for_development_version(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n"
+        "## Unreleased\n\n"
+        "- Current source change.\n\n"
+        "## 0.1.11 - 2026-08-13\n\n"
+        "- Public release.\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        MODULE.main(
+            [
+                "check_changelog.py",
+                "--changelog",
+                str(changelog),
+                "--version",
+                "0.1.12.dev0",
+            ]
+        )
+        == 0
+    )
 
 
 def test_main_rejects_empty_notes_without_write_mode(
