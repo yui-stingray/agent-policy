@@ -43,9 +43,31 @@ FORCE_PUSH_EXECUTION_FORMS = (
     "git push --force-w origin main",
     "git push --mir origin",
     "git send-pack --force origin HEAD:main",
+    "git-push --force origin main",
     "bash -c 'echo safe'\ngit push --force origin main",
     "F=--force; git push $F origin main",
     "REF=+HEAD:main; git push origin $REF",
+)
+FAIL_CLOSED_COMMAND_FORMS = (
+    "git push --fo* origin main",
+    "bash -O extglob -c 'git push --@(force|force) origin main'",
+    r"printf '%s\n' --force | xargs -I{} git push {} origin main",
+    "find . -exec git push --force origin main \\;",
+    "git config alias.fp 'push --force'",
+    "git-config alias.fp 'push --force'",
+    "git fp origin main",
+    "> /dev/null git push --force origin main",
+    "exec git push --force origin main",
+    "time git push --force origin main",
+    "nohup git push --force origin main",
+    "( git push --force origin main )",
+    "echo hi |& git push --force origin main",
+    "&>/dev/null git push --force origin main",
+    "{fd}>/dev/null git push --force origin main",
+    "sudo FOO=bar git push --force origin main",
+    'P=-exec; find . "$P" git push --force origin main \\;',
+    "stdbuf -oL git push --force origin main",
+    'runner=git; stdbuf -oL "$runner" push --force origin main',
 )
 BASH_LINE_CONTINUATION = "\\" + "\n"
 BACKSLASH_CRLF = "\\" + "\r\n"
@@ -359,6 +381,29 @@ def test_brace_expansion_denies_shell_auto_allow_without_command_leakage(
     result = _run_hook(
         _codex_payload(command),
         policy=_shell_auto_allow_policy(tmp_path),
+    )
+
+    assert result.returncode == 0
+    assert _decision(result) == DENY_PAYLOAD
+    assert result.stderr == ""
+    assert command not in result.stdout
+    assert command not in result.stderr
+
+
+@pytest.mark.parametrize("command", FAIL_CLOSED_COMMAND_FORMS)
+@pytest.mark.parametrize("use_default_policy", (False, True))
+def test_new_fail_closed_forms_deny_shell_auto_allow_without_command_leakage(
+    command: str,
+    use_default_policy: bool,
+    tmp_path: Path,
+) -> None:
+    result = _run_hook(
+        _codex_payload(command),
+        policy=(
+            _default_auto_allow_policy(tmp_path)
+            if use_default_policy
+            else _shell_auto_allow_policy(tmp_path)
+        ),
     )
 
     assert result.returncode == 0

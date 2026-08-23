@@ -10,7 +10,7 @@ Why: capability_map.py replaces the previous substring matcher in
 
        1. The false positive is fixed (printf / echo / cat <<EOF).
        2. The true positives the old matcher caught are still caught
-          (sudo/xargs/bash -c/eval/env-assignment/absolute path).
+          (sudo/bash -c/eval/env-assignment/absolute path).
        3. The compound command logic picks the strictest capability.
        4. Malformed or ambiguous syntax returns ``unknown`` rather than a
           policy-controlled capability.
@@ -212,7 +212,6 @@ def test_valid_brace_sequence_returns_unknown(command: str) -> None:
         "git push '--{force,force}' origin main",
         'git push "--{force,force}" origin main',
         r"git push --\{force,force\} origin main",
-        "{ echo a,b; }",
         "echo ${value:-{force,force}}",
         "cat <<'EOF'\ngit push --{force,force} origin main\nEOF",
         f"printf '%s\\n' 'git push --{{f.{BASH_LINE_CONTINUATION}.f}}force'",
@@ -241,6 +240,49 @@ def test_non_expanding_brace_forms_remain_shell(command: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pathname expansion: unquoted argv generation must fail closed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push --fo* origin main",
+        "git push --fo? origin main",
+        "git push --fo[rc]e origin main",
+        "git push --fo[[:alpha:]] origin main",
+        "git push --@(force|force) origin main",
+        "git push --+(force) origin main",
+        "git push --!(safe) origin main",
+    ],
+)
+def test_active_unquoted_pathname_expansion_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf '%s' 'git push --fo* origin main'",
+        "git push --fo\\* origin main",
+        "true # git push --fo* origin main",
+        """cat <<EOF
+git push --fo* origin main
+EOF""",
+        "git push '--fo[rc]e' origin main",
+        "git push '--@(force|force)' origin main",
+        "git push --fo\\[rc\\]e origin main",
+        "git push --fo[] origin main",
+        "PATTERN=* git status",
+        "SECOND=? FIRST=* git status",
+        "printf '%s' $[2*3]",
+    ],
+)
+def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+# ---------------------------------------------------------------------------
 # True positives: must still classify as push.force
 # ---------------------------------------------------------------------------
 
@@ -257,6 +299,8 @@ def test_non_expanding_brace_forms_remain_shell(command: str) -> None:
         "git push --mir origin",
         "git send-pack --force origin HEAD:main",
         "git-send-pack --force origin HEAD:main",
+        "git-push --force origin main",
+        "/usr/lib/git-core/git-push --force origin main",
         "git push -f origin main",
         # Short-option cluster: -fu == -f -u.
         "git push -fu origin main",
@@ -265,9 +309,8 @@ def test_non_expanding_brace_forms_remain_shell(command: str) -> None:
         "GIT_SSH_COMMAND='ssh -i key' git push --force origin main",
         # Absolute path to git — basename normalization.
         "/usr/bin/git push --force origin main",
-        # Scan-anywhere: sudo / xargs wrappers.
+        # Scan-anywhere: sudo wrapper.
         "sudo git push --force origin main",
-        "xargs -n1 git push --force origin main",
         # Compound command: strictest wins.
         "git status && git push --force",
         "git push --force; ls",
@@ -302,6 +345,23 @@ def test_force_push_is_detected(command: str) -> None:
         ("bash -c 'echo safe'\ngit push --force origin main", "push.force"),
         ("F=--force; git push $F origin main", "unknown"),
         ("REF=+HEAD:main; git push origin $REF", "unknown"),
+        ("xargs -n1 git push --force origin main", "unknown"),
+        ("> /dev/null git push --force origin main", "unknown"),
+        ("2>/dev/null git push --force origin main", "unknown"),
+        ("exec git push --force origin main", "unknown"),
+        ("time git push --force origin main", "unknown"),
+        ("nohup git push --force origin main", "unknown"),
+        ("stdbuf -oL git push --force origin main", "unknown"),
+        ('runner=git; stdbuf -oL "$runner" push --force origin main', "unknown"),
+        ("( git push --force origin main )", "unknown"),
+        ("echo hi |& git push --force origin main", "push.force"),
+        ("&>/dev/null git push --force origin main", "unknown"),
+        ("{fd}>/dev/null git push --force origin main", "unknown"),
+        ("sudo FOO=bar git push --force origin main", "unknown"),
+        (
+            'P=-exec; find . "$P" git push --force origin main \\;',
+            "unknown",
+        ),
     ],
 )
 def test_force_push_execution_forms_do_not_fall_through_to_shell(
@@ -362,6 +422,72 @@ def test_compound_strictest_capability_wins() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dynamic argv execution and Git dispatch: fail closed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"printf '%s\n' --force | xargs -I{} git push {} origin main",
+        "xargs -n1 git push --force origin main",
+        "find . -exec printf '%s' {} \\;",
+        "find . -execdir printf '%s' {} +",
+        "find . -ok printf '%s' {} \\;",
+        "find . -okdir printf '%s' {} \\;",
+        # Conservatively blocked: this token could be a -name value, but the
+        # bounded parser does not model find expression arity.
+        "find /tmp -maxdepth 0 -name -exec",
+    ],
+)
+def test_dynamic_argv_execution_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git config alias.fp 'push --force'",
+        "git fp origin main",
+        "git unrecognized-subcommand",
+        "git-config alias.fp 'push --force'",
+        "git-fp origin main",
+    ],
+)
+def test_git_aliases_and_unrecognized_subcommands_return_unknown(
+    command: str,
+) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo xargs",
+        "git commit -m xargs",
+        "echo find -exec",
+    ],
+)
+def test_dynamic_executor_words_in_arguments_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+def test_sensitive_command_words_behind_unmodeled_prefix_fail_closed() -> None:
+    assert map_command("printf '%s' git push --force") == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "{ echo a,b; }",
+        "source reviewed-script.sh",
+    ],
+)
+def test_unmodeled_execution_prefixes_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Plain shell commands
 # ---------------------------------------------------------------------------
 
@@ -371,6 +497,10 @@ def test_compound_strictest_capability_wins() -> None:
     [
         "ls -la",
         "git status",
+        "git add README.md",
+        "git commit -m wip",
+        "git diff --cached",
+        "git fetch origin",
         "git push origin main",
         "git push origin main --tags",
         "git commit -m 'wip'",
