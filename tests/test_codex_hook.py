@@ -42,6 +42,39 @@ FORCE_PUSH_EXECUTION_FORMS = (
     "F=--force; git push $F origin main",
     "REF=+HEAD:main; git push origin $REF",
 )
+BASH_LINE_CONTINUATION = "\\" + "\n"
+BACKSLASH_CRLF = "\\" + "\r\n"
+BRACE_EXPANSION_BYPASSES = (
+    "git push --{force,force} origin main",
+    "git push --{f..f}orce origin main",
+    "git push --{force,{force,force}} origin main",
+    f"git push --{{f.{BASH_LINE_CONTINUATION}.f}}force origin main",
+    f"true{BASH_LINE_CONTINUATION}#x; "
+    "git push --{force,force} origin main",
+    f"true # comment {BACKSLASH_CRLF}"
+    "git push --{force,force} origin main",
+    r"true\ #x; git push --{force,force} origin main",
+    r"true\;#x; git push --{force,force} origin main",
+    r"true\|#x; git push --{force,force} origin main",
+    r"true\&#x; git push --{force,force} origin main",
+    r"true\(#x; git push --{force,force} origin main",
+    r"true\)#x; git push --{force,force} origin main",
+    "true\r#x; git push --{force,force} origin main",
+    "git push --{force,\rnoop} origin main",
+)
+BRACE_EXPANSION_CONTROLS = (
+    f"true # comment {BASH_LINE_CONTINUATION}"
+    "git push --{force,force} origin main",
+    f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
+    "true #x; git push --{force,force} origin main",
+    r"true\\ #x; git push --{force,force} origin main",
+    r"printf '%s\n' 'true\ #x; "
+    "git push --{force,force} origin main'",
+    r"echo {\..a}",
+    "printf '%s\\n' 'true\r#x; "
+    "git push --{force,force} origin main'",
+    "printf '%s\\n' 'value\rnoop'",
+)
 VALID_EVALUATOR_DECISION = (
     '{"matched_repo":null,"mode":"auto_allow","reason":"test"}'
 )
@@ -134,6 +167,24 @@ shell = "auto_allow"
 def _default_auto_allow_policy(tmp_path: Path) -> Path:
     policy = tmp_path / "default-auto-allow.toml"
     policy.write_text('default_mode = "auto_allow"\n', encoding="utf-8")
+    return policy
+
+
+def _shell_auto_allow_policy(tmp_path: Path) -> Path:
+    policy = tmp_path / "shell-auto-allow.toml"
+    policy.write_text(
+        """
+default_mode = "require_approval"
+
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "internal"
+
+[repo_policy.capabilities]
+shell = "auto_allow"
+""".lstrip(),
+        encoding="utf-8",
+    )
     return policy
 
 
@@ -276,6 +327,38 @@ def test_force_push_execution_forms_never_auto_allow(command: str, tmp_path: Pat
     assert result.returncode == HOOK_BLOCK
     assert result.stdout == ""
     assert result.stderr == BLOCK_MESSAGE
+
+
+@pytest.mark.parametrize("command", BRACE_EXPANSION_BYPASSES)
+def test_brace_expansion_blocks_shell_auto_allow_without_command_leakage(
+    command: str,
+    tmp_path: Path,
+) -> None:
+    result = _run_hook(
+        _codex_payload(command),
+        policy=_shell_auto_allow_policy(tmp_path),
+    )
+
+    assert result.returncode == HOOK_BLOCK
+    assert result.stdout == ""
+    assert result.stderr == BLOCK_MESSAGE
+    assert command not in result.stdout
+    assert command not in result.stderr
+
+
+@pytest.mark.parametrize("command", BRACE_EXPANSION_CONTROLS)
+def test_nonexpanding_brace_controls_remain_shell_auto_allowed(
+    command: str,
+    tmp_path: Path,
+) -> None:
+    result = _run_hook(
+        _codex_payload(command),
+        policy=_shell_auto_allow_policy(tmp_path),
+    )
+
+    assert result.returncode == HOOK_ALLOW
+    assert result.stdout == ""
+    assert result.stderr == ""
 
 
 @pytest.mark.parametrize(

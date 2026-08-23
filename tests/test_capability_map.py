@@ -46,6 +46,28 @@ def _load_helper():
 capability_map = _load_helper()
 map_command = capability_map.map_command
 
+BASH_LINE_CONTINUATION = "\\" + "\n"
+BACKSLASH_CRLF = "\\" + "\r\n"
+ESCAPED_BACKSLASH_NEWLINE = "\\\\" + "\n"
+BRACE_EXPANSION_BYPASSES = (
+    "git push --{force,force} origin main",
+    "git push --{f..f}orce origin main",
+    "git push --{force,{force,force}} origin main",
+    f"git push --{{f.{BASH_LINE_CONTINUATION}.f}}force origin main",
+    f"true{BASH_LINE_CONTINUATION}#x; "
+    "git push --{force,force} origin main",
+    f"true # comment {BACKSLASH_CRLF}"
+    "git push --{force,force} origin main",
+    r"true\ #x; git push --{force,force} origin main",
+    r"true\;#x; git push --{force,force} origin main",
+    r"true\|#x; git push --{force,force} origin main",
+    r"true\&#x; git push --{force,force} origin main",
+    r"true\(#x; git push --{force,force} origin main",
+    r"true\)#x; git push --{force,force} origin main",
+    "true\r#x; git push --{force,force} origin main",
+    "git push --{force,\rnoop} origin main",
+)
+
 
 # ---------------------------------------------------------------------------
 # Regression: the old substring matcher's false positives
@@ -141,9 +163,81 @@ def test_literal_or_non_command_substitution_remains_shell(command: str) -> None
     assert map_command(command) == "shell"
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (f"true {BASH_LINE_CONTINUATION}# $(echo harmless)", "shell"),
+        (
+            f"true {BASH_LINE_CONTINUATION}{BASH_LINE_CONTINUATION}"
+            "# $(echo harmless)",
+            "shell",
+        ),
+        (f"true {ESCAPED_BACKSLASH_NEWLINE}# $(echo harmless)", "shell"),
+        ("true " + "\\\\\\" + "\n# $(echo harmless)", "unknown"),
+        (r"true\ " + BASH_LINE_CONTINUATION + "# $(echo harmless)", "unknown"),
+        (f"true {BACKSLASH_CRLF}# $(echo harmless)", "shell"),
+        ("true " + "\\" + "\r# $(echo harmless)", "unknown"),
+    ],
+)
+def test_logical_line_comment_boundaries(command: str, expected: str) -> None:
+    assert map_command(command) == expected
+
+
 def test_arithmetic_shift_is_shell_but_nested_command_substitution_is_unknown() -> None:
     assert map_command("((x = 1 << 2))") == "shell"
     assert map_command("((x = $(printf 1) << 2))") == "unknown"
+
+
+@pytest.mark.parametrize("command", BRACE_EXPANSION_BYPASSES)
+def test_active_unquoted_brace_expansion_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo {1..2}",
+        "echo {-2..+2}",
+        "echo {1..3..+1}",
+        "echo {a..z..2}",
+    ],
+)
+def test_valid_brace_sequence_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push '--{force,force}' origin main",
+        'git push "--{force,force}" origin main',
+        r"git push --\{force,force\} origin main",
+        "{ echo a,b; }",
+        "echo ${value:-{force,force}}",
+        "cat <<'EOF'\ngit push --{force,force} origin main\nEOF",
+        f"printf '%s\\n' 'git push --{{f.{BASH_LINE_CONTINUATION}.f}}force'",
+        f'printf \'%s\\n\' "git push --{{f.{BASH_LINE_CONTINUATION}.f}}force"',
+        f"git push --{{f.{ESCAPED_BACKSLASH_NEWLINE}.f}}force origin main",
+        f"printf '%s\\n' 'true{BASH_LINE_CONTINUATION}#x; "
+        "git push --{force,force} origin main'",
+        f"true # comment {BASH_LINE_CONTINUATION}"
+        "git push --{force,force} origin main",
+        f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
+        "true #x; git push --{force,force} origin main",
+        r"true\\ #x; git push --{force,force} origin main",
+        r"printf '%s\n' 'true\ #x; "
+        "git push --{force,force} origin main'",
+        r"echo {\..a}",
+        "printf '%s\\n' 'true\r#x; "
+        "git push --{force,force} origin main'",
+        "printf '%s\\n' 'value\rnoop'",
+        "echo {..}",
+        "echo {a..bc}",
+        "echo {1..2..x}",
+    ],
+)
+def test_non_expanding_brace_forms_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
 
 
 # ---------------------------------------------------------------------------
