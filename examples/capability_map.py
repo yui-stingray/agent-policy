@@ -803,6 +803,16 @@ def _starts_comment(command: str, index: int) -> bool:
         return True
 
     boundary = index - 1
+    while (
+        boundary >= 1
+        and command[boundary] == "\n"
+        and _is_backslash_escaped(command, boundary)
+    ):
+        # Bash removes an active backslash-LF pair before recognizing
+        # comments, so inspect the preceding logical-line character.
+        boundary -= 2
+    if boundary < 0:
+        return True
     return (
         command[boundary] in _BASH_LEXICAL_WHITESPACE
         or command[boundary] in ";|&()"

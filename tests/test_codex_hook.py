@@ -65,6 +65,7 @@ BRACE_EXPANSION_BYPASSES = (
 BRACE_EXPANSION_CONTROLS = (
     f"true # comment {BASH_LINE_CONTINUATION}"
     "git push --{force,force} origin main",
+    f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
     "true #x; git push --{force,force} origin main",
     r"true\\ #x; git push --{force,force} origin main",
     r"printf '%s\n' 'true\ #x; "

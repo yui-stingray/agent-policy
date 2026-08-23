@@ -163,6 +163,26 @@ def test_literal_or_non_command_substitution_remains_shell(command: str) -> None
     assert map_command(command) == "shell"
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (f"true {BASH_LINE_CONTINUATION}# $(echo harmless)", "shell"),
+        (
+            f"true {BASH_LINE_CONTINUATION}{BASH_LINE_CONTINUATION}"
+            "# $(echo harmless)",
+            "shell",
+        ),
+        (f"true {ESCAPED_BACKSLASH_NEWLINE}# $(echo harmless)", "shell"),
+        ("true " + "\\\\\\" + "\n# $(echo harmless)", "unknown"),
+        (r"true\ " + BASH_LINE_CONTINUATION + "# $(echo harmless)", "unknown"),
+        (f"true {BACKSLASH_CRLF}# $(echo harmless)", "shell"),
+        ("true " + "\\" + "\r# $(echo harmless)", "unknown"),
+    ],
+)
+def test_logical_line_comment_boundaries(command: str, expected: str) -> None:
+    assert map_command(command) == expected
+
+
 def test_arithmetic_shift_is_shell_but_nested_command_substitution_is_unknown() -> None:
     assert map_command("((x = 1 << 2))") == "shell"
     assert map_command("((x = $(printf 1) << 2))") == "unknown"
@@ -202,6 +222,7 @@ def test_valid_brace_sequence_returns_unknown(command: str) -> None:
         "git push --{force,force} origin main'",
         f"true # comment {BASH_LINE_CONTINUATION}"
         "git push --{force,force} origin main",
+        f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
         "true #x; git push --{force,force} origin main",
         r"true\\ #x; git push --{force,force} origin main",
         r"printf '%s\n' 'true\ #x; "
