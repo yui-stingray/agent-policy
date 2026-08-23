@@ -162,6 +162,23 @@ def test_ci_and_release_builds_use_the_hashed_nonisolated_toolchain() -> None:
         ) < workflow_job.index("Verify wheel public contract")
 
 
+def test_ci_exposes_one_stable_required_aggregate() -> None:
+    workflow = WORKFLOWS["ci"].read_text(encoding="utf-8")
+    required_job = workflow[workflow.index("\n  required-ci:\n") :]
+
+    assert "name: agent-policy required CI" in required_job
+    assert "if: ${{ always() }}" in required_job
+    for dependency in ("actionlint", "release-contract", "test"):
+        assert f"      - {dependency}" in required_job
+    for result in (
+        "needs.actionlint.result",
+        "needs.release-contract.result",
+        "needs.test.result",
+    ):
+        assert result in required_job
+    assert required_job.count('= "success"') == 3
+
+
 def test_release_preflight_requires_current_master_push_ci_success() -> None:
     workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
     assert "Require annotated tag at current protected master with successful CI" in workflow

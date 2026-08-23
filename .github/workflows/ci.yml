@@ -80,3 +80,22 @@ jobs:
         run: python scripts/check_changelog.py
       - name: Run tests
         run: python -m pytest -q
+
+  required-ci:
+    name: agent-policy required CI
+    if: ${{ always() }}
+    needs:
+      - actionlint
+      - release-contract
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI contract to pass
+        env:
+          ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
+          RELEASE_CONTRACT_RESULT: ${{ needs.release-contract.result }}
+          PYTEST_MATRIX_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$ACTIONLINT_RESULT" = "success"
+          test "$RELEASE_CONTRACT_RESULT" = "success"
+          test "$PYTEST_MATRIX_RESULT" = "success"
