@@ -225,7 +225,7 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
     assert check_wheel_contract.main() == 0
 
     python = tmp_path / "venv" / "bin" / "python"
-    assert len(commands) == 3
+    assert len(commands) == 4
     assert commands[0][0] == [
         str(python),
         "-m",
@@ -246,7 +246,8 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
         "--no-deps",
         str(wheel),
     ]
-    assert commands[2][0][:3] == [str(python), "-I", "-c"]
+    assert commands[2][0] == [str(python), "-m", "pip", "check"]
+    assert commands[3][0][:3] == [str(python), "-I", "-c"]
     assert all(cwd == tmp_path for _command, cwd in commands)
 
 

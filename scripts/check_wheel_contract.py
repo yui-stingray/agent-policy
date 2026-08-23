@@ -104,6 +104,7 @@ def main() -> int:
                 [str(python), "-m", "pip", "install", "--quiet", "--no-deps", str(wheel)],
                 cwd=temp,
             )
+            run([str(python), "-m", "pip", "check"], cwd=temp)
             smoke = textwrap.dedent(
                 f"""
             import agent_policy
