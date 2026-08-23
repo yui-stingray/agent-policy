@@ -7,6 +7,18 @@ package is still alpha.
 
 ## Unreleased
 
+- Made the example capability mapper fail closed on active unquoted Bash brace
+  expansion before `shlex` tokenization, including expansions assembled across
+  exact backslash-LF continuations and escaped comment boundaries, while
+  preserving CR and CRLF as ordinary word content and physical-line endings,
+  respectively, and validating Bash-compatible sequence ranges, so
+  brace-generated force-push arguments cannot fall through to `shell`; quoted
+  or escaped braces, parameter expansion, shell grouping, malformed range
+  literals, and heredoc bodies retain their prior handling.
+- Validated evaluator context at the public boundary: non-mappings, invalid
+  `ownership_class` values, and non-boolean `first_write_to_repo` values now
+  raise before policy fallback, while falsey mappings are copied and extra
+  context keys remain supported.
 - Identified the stricter current source as `0.1.12.dev0`, distinct from the
   latest public PyPI release `0.1.11`, so built unreleased artifacts cannot
   reuse the published version identity.

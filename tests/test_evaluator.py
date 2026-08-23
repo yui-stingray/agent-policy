@@ -127,6 +127,83 @@ def test_external_first_write_does_not_block_read() -> None:
     assert decision.matched_repo is None
 
 
+class _FalseyContext(dict[str, object]):
+    """Mapping that must still be copied despite its false boolean value."""
+
+    def __bool__(self) -> bool:
+        return False
+
+
+def test_falsey_context_mapping_is_copied_before_guardrail_evaluation() -> None:
+    context = _FalseyContext(
+        ownership_class="external",
+        first_write_to_repo=True,
+    )
+
+    decision = evaluate(
+        PolicyMatrix(default_mode="auto_allow"),
+        repo="someone-else/their-repo",
+        capability="shell",
+        context=context,
+    )
+
+    assert decision.mode == "require_approval"
+    assert decision.reason == "hard_guardrail"
+
+
+@pytest.mark.parametrize(
+    ("context", "error_type", "message"),
+    [
+        ([], TypeError, "context must be a mapping"),
+        (
+            {"ownership_class": None},
+            ValueError,
+            "context.ownership_class must be 'internal' or 'external'",
+        ),
+        (
+            {"ownership_class": "partner"},
+            ValueError,
+            "context.ownership_class must be 'internal' or 'external'",
+        ),
+        (
+            {"first_write_to_repo": 1},
+            TypeError,
+            "context.first_write_to_repo must be a bool",
+        ),
+    ],
+)
+def test_invalid_context_is_rejected_before_auto_allow_fallback(
+    context: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type) as raised:
+        evaluate(
+            PolicyMatrix(default_mode="auto_allow"),
+            repo="acme/app",
+            capability="shell",
+            context=context,  # type: ignore[arg-type]
+        )
+
+    assert str(raised.value) == message
+
+
+def test_context_allows_extra_keys_and_boolean_first_write_values() -> None:
+    decision = evaluate(
+        PolicyMatrix(default_mode="auto_allow"),
+        repo="acme/app",
+        capability="shell",
+        context={
+            "ownership_class": "internal",
+            "first_write_to_repo": False,
+            "future_wrapper_key": {"version": 1},
+        },
+    )
+
+    assert decision.mode == "auto_allow"
+    assert decision.reason == "default_mode"
+
+
 # ---------------------------------------------------------------------------
 # repo_policy matching
 # ---------------------------------------------------------------------------

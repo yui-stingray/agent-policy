@@ -34,7 +34,7 @@ def evaluate(
 ) -> PolicyDecision:
     """Return the policy decision for a single (repo, capability, context) tuple."""
     matrix = _coerce(policy)
-    ctx: dict[str, Any] = dict(context or {})
+    ctx = _coerce_context(context)
 
     guardrail = _evaluate_hard_guardrails(
         repo=repo,
@@ -76,6 +76,29 @@ def _coerce(policy: PolicyMatrix | Mapping[str, Any]) -> PolicyMatrix:
     if isinstance(policy, PolicyMatrix):
         return PolicyMatrix.model_validate(policy.model_dump())
     return PolicyMatrix.model_validate(policy)
+
+
+def _coerce_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Copy and validate the evaluator-owned context fields."""
+    if context is None:
+        return {}
+    if not isinstance(context, Mapping):
+        raise TypeError("context must be a mapping")
+
+    ctx = dict(context)
+    if (
+        "ownership_class" in ctx
+        and ctx["ownership_class"] not in {"internal", "external"}
+    ):
+        raise ValueError(
+            "context.ownership_class must be 'internal' or 'external'"
+        )
+    if (
+        "first_write_to_repo" in ctx
+        and not isinstance(ctx["first_write_to_repo"], bool)
+    ):
+        raise TypeError("context.first_write_to_repo must be a bool")
+    return ctx
 
 
 def _ownership_matches(repo_policy: RepoPolicy, context: Mapping[str, Any]) -> bool:

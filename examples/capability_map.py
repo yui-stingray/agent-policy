@@ -18,29 +18,33 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             operators, so ``cat <<EOF ... git push --force ... EOF``
             is not scanned as commands while ``echo '<<EOF'`` remains
             literal data.
-         2. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
+         2. Normalizing active Bash backslash-newline continuations for
+            brace/comment analysis, then returning ``unknown`` for active
+            unquoted brace expansion before tokenization because ``shlex``
+            cannot model forms such as ``--{force,force}``.
+         3. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
             operators like ``;``, ``&&``, ``||``, ``|``, ``&`` become
             their own tokens and quoted arguments collapse into single
             opaque tokens.
-         3. Splitting the token stream into statements on those
+         4. Splitting the token stream into statements on those
             operators and classifying each statement independently.
-         4. Within a statement, scanning for the narrow set of
+         5. Within a statement, scanning for the narrow set of
             patterns the hooks care about:
 
                 git push ... --force[-with-lease] / -f  → push.force
                 gh pr merge ...                         → merge.pr
                 anything else                           → shell
 
-         5. Recursively classifying the embedded command when the
+         6. Recursively classifying the embedded command when the
             statement is ``bash -c '...'`` / ``sh -c '...'`` / ``eval
             '...'``, so dropping into a nested shell does not hide a
             ``push.force`` from the hook.
 
-         6. Returning ``unknown`` for malformed, ambiguous, incomplete, or
+         7. Returning ``unknown`` for malformed, ambiguous, incomplete, or
             unmodeled execution syntax. Hooks must reject ``unknown`` rather
             than passing it to policy fallback.
 
-         7. Returning ``unknown`` for active command substitution. The
+         8. Returning ``unknown`` for active command substitution. The
             bounded parser does not attempt to interpret embedded backtick
             or ``$()`` commands; single-quoted and escaped forms remain
             literal data.
@@ -57,6 +61,12 @@ outside the narrow patterns fall back to ``shell``. Syntax the helper cannot
 parse confidently returns ``unknown`` so a wrapper can fail closed before
 policy evaluation.
 
+Active unquoted brace expansion is also rejected before ``shlex`` because it
+can create arguments that are not visible in the raw token stream. The brace
+scan uses Bash logical lines after exact backslash-LF continuations are
+removed. Quoted or escaped braces, parameter expansion, ordinary shell
+grouping, and stripped heredoc bodies do not trigger this fallback.
+
 This module is stdlib-only so it does not depend on ``agent_policy``
 and can be exercised by unit tests without the package install.
 """
@@ -71,6 +81,10 @@ import sys
 # punctuation_chars=True emits these as their own tokens when they
 # appear unquoted.
 _SEPARATORS = frozenset({";", ";;", "&", "&&", "|", "||"})
+
+# Bash's lexical blanks and line separator. Python's str.isspace() also
+# includes characters such as CR that remain ordinary shell word content.
+_BASH_LEXICAL_WHITESPACE = frozenset({" ", "\t", "\n"})
 
 # Shell wrappers that take an embedded command via ``-c <cmd>``. We
 # recurse into their argument so ``bash -c 'git push --force'`` is not
@@ -158,6 +172,9 @@ def map_command(command: str, _depth: int = 0) -> str:
 
     try:
         stripped = _strip_heredocs(command)
+        brace_source = _normalize_active_line_continuations(stripped)
+        if _contains_active_unquoted_brace_expansion(brace_source):
+            return "unknown"
         tokens = _tokenize(_separate_unquoted_newlines(stripped))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
@@ -219,6 +236,254 @@ def _separate_unquoted_newlines(command: str) -> str:
             out.append(";")
         index += 1
     return "".join(out)
+
+
+def _normalize_active_line_continuations(command: str) -> str:
+    """Remove Bash line continuations for brace and comment analysis.
+
+    Bash removes an exact backslash-LF pair outside single quotes before
+    recognizing comments or brace expansion. A backslash-CRLF pair is not a
+    continuation on Linux, so its LF still ends the physical line. Double
+    quotes retain the exact backslash-LF behavior. Escaped backslashes and
+    quote characters remain verbatim, and quote characters inside comments
+    do not affect later logical lines.
+
+    Heredoc bodies have already been stripped before this helper runs. The
+    normalized view is used only by the brace scanner; substitution detection
+    and shlex tokenization retain their existing input and behavior.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    in_comment = False
+    previous_escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+
+        if quote == "'":
+            out.append(char)
+            previous_escaped = False
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+
+        if char == "\\":
+            if command.startswith("\\\n", index):
+                index += 2
+                continue
+            out.append(char)
+            if index + 1 < len(command):
+                out.append(command[index + 1])
+                previous_escaped = True
+                index += 2
+            else:
+                previous_escaped = False
+                index += 1
+            continue
+
+        if in_comment:
+            out.append(char)
+            if char == "\n":
+                in_comment = False
+                previous_escaped = False
+            index += 1
+            continue
+
+        previous = out[-1] if out else None
+        out.append(char)
+        if quote == '"':
+            if char == quote:
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "#" and (
+            previous is None
+            or (
+                (
+                    previous in _BASH_LEXICAL_WHITESPACE
+                    or previous in ";|&()"
+                )
+                and not previous_escaped
+            )
+        ):
+            in_comment = True
+        previous_escaped = False
+        index += 1
+    return "".join(out)
+
+
+def _contains_active_unquoted_brace_expansion(command: str) -> bool:
+    """Whether ``command`` contains a Bash brace expansion before shlex.
+
+    Brace expansion happens before the token-level handling this helper can
+    model. It requires an unquoted brace pair with an unquoted comma or range
+    marker. Sequence expressions are limited to Bash's numeric or
+    single-character endpoint grammar, while quoted and escaped text remains
+    literal.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                return False
+            index = newline + 1
+            continue
+        if command.startswith("${", index):
+            index = _skip_parameter_expansion(command, index)
+            continue
+        if char == "{" and _is_active_brace_expansion(command, index):
+            return True
+        index += 1
+    return False
+
+
+def _skip_parameter_expansion(command: str, start: int) -> int:
+    """Return the offset after a parameter expansion, or end of input.
+
+    Parameter expansion has its own brace grammar and is not Bash brace
+    expansion. Nested braces are skipped as a unit so commas and ranges in
+    forms such as ``${value:-{left,right}}`` cannot be mistaken for argv
+    expansion.
+    """
+    depth = 1
+    quote: str | None = None
+    index = start + 2
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(command)
+
+
+def _is_active_brace_expansion(command: str, opening: int) -> bool:
+    """Whether an unquoted opening brace starts a bounded expansion form."""
+    # A grouping brace is a shell word of its own, which requires whitespace
+    # after the opening delimiter. Brace expansion stays within one word.
+    if (
+        opening + 1 >= len(command)
+        or command[opening + 1] in _BASH_LEXICAL_WHITESPACE
+    ):
+        return False
+
+    depth = 1
+    quote: str | None = None
+    saw_comma = False
+    index = opening + 1
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char in _BASH_LEXICAL_WHITESPACE:
+            return False
+        if command.startswith("${", index):
+            index = _skip_parameter_expansion(command, index)
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                body = command[opening + 1 : index]
+                return saw_comma or _is_valid_brace_sequence(body)
+        elif char == ",":
+            saw_comma = True
+        index += 1
+    return False
+
+
+def _is_valid_brace_sequence(body: str) -> bool:
+    """Return whether ``body`` is a bounded Bash sequence expression."""
+    if "\\" in body:
+        return False
+
+    parts = body.split("..")
+    if len(parts) not in {2, 3}:
+        return False
+
+    start, end = parts[:2]
+    start_is_integer = _is_brace_integer(start)
+    end_is_integer = _is_brace_integer(end)
+    if start_is_integer or end_is_integer:
+        if not (start_is_integer and end_is_integer):
+            return False
+    elif len(start) != 1 or len(end) != 1:
+        return False
+
+    return len(parts) == 2 or _is_brace_integer(parts[2])
+
+
+def _is_brace_integer(value: str) -> bool:
+    """Return whether ``value`` is a Bash brace-sequence integer."""
+    if value.startswith(("+", "-")):
+        value = value[1:]
+    return bool(value) and value.isascii() and value.isdigit()
 
 
 def _strip_heredocs(command: str) -> str:
@@ -534,11 +799,24 @@ def _contains_active_heredoc_substitution(line: str) -> bool:
 
 def _starts_comment(command: str, index: int) -> bool:
     """Return whether an unquoted # starts a shell comment here."""
+    if index == 0:
+        return True
+
+    boundary = index - 1
     return (
-        index == 0
-        or command[index - 1].isspace()
-        or command[index - 1] in ";|&()"
-    )
+        command[boundary] in _BASH_LEXICAL_WHITESPACE
+        or command[boundary] in ";|&()"
+    ) and not _is_backslash_escaped(command, boundary)
+
+
+def _is_backslash_escaped(command: str, index: int) -> bool:
+    """Return whether the character at ``index`` has an active backslash."""
+    backslashes = 0
+    index -= 1
+    while index >= 0 and command[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
 
 
 def _is_heredoc_boundary(char: str) -> bool:
