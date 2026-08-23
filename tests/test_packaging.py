@@ -16,6 +16,9 @@ import tomllib
 from pathlib import Path
 
 import agent_policy
+import pytest
+
+from scripts import check_wheel_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -177,3 +180,91 @@ def test_py_typed_marker_is_present() -> None:
     # Must be empty per PEP 561; a non-empty file is technically allowed
     # but conventionally signals "partial" typing, which is not the intent.
     assert marker.stat().st_size == 0
+
+
+def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class TemporaryDirectory:
+        def __enter__(self) -> str:
+            return str(tmp_path)
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class EnvBuilder:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def create(self, _venv_dir: Path) -> None:
+            pass
+
+    commands: list[tuple[list[str], Path]] = []
+    wheel = tmp_path / "dist" / "yui_agent_policy-0.0.0-py3-none-any.whl"
+    runtime_lock = tmp_path / "requirements" / "runtime-contract.txt"
+
+    def fake_run(command: list[str], *, cwd: Path) -> None:
+        commands.append((command, cwd))
+
+    monkeypatch.setattr(
+        check_wheel_contract.tempfile,
+        "TemporaryDirectory",
+        lambda **_kwargs: TemporaryDirectory(),
+    )
+    monkeypatch.setattr(check_wheel_contract.venv, "EnvBuilder", EnvBuilder)
+    monkeypatch.setattr(check_wheel_contract, "project_version", lambda: "0.0.0")
+    monkeypatch.setattr(check_wheel_contract, "find_wheel", lambda _version: wheel)
+    monkeypatch.setattr(check_wheel_contract, "RUNTIME_LOCK", runtime_lock)
+    monkeypatch.setattr(
+        check_wheel_contract,
+        "dist_artifact_digests",
+        lambda: {"yui_agent_policy-0.0.0-py3-none-any.whl": "digest"},
+    )
+    monkeypatch.setattr(check_wheel_contract, "run", fake_run)
+
+    assert check_wheel_contract.main() == 0
+
+    python = tmp_path / "venv" / "bin" / "python"
+    assert len(commands) == 3
+    assert commands[0][0] == [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "--require-hashes",
+        "--only-binary=:all:",
+        "-r",
+        str(runtime_lock),
+    ]
+    assert commands[1][0] == [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "--no-deps",
+        str(wheel),
+    ]
+    assert commands[2][0][:3] == [str(python), "-I", "-c"]
+    assert all(cwd == tmp_path for _command, cwd in commands)
+
+
+@pytest.mark.parametrize("mutation", ("content", "set"))
+def test_wheel_contract_rejects_dist_artifact_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+) -> None:
+    monkeypatch.setattr(check_wheel_contract, "DIST", tmp_path)
+    artifact = tmp_path / "yui_agent_policy-0.0.0-py3-none-any.whl"
+    artifact.write_bytes(b"original artifact")
+    before = check_wheel_contract.dist_artifact_digests()
+
+    if mutation == "content":
+        artifact.write_bytes(b"altered artifact")
+    else:
+        (tmp_path / "added-artifact.tar.gz").write_bytes(b"unexpected artifact")
+
+    with pytest.raises(
+        RuntimeError, match="distribution artifacts changed during wheel contract"
+    ):
+        check_wheel_contract.verify_dist_artifacts_unchanged(before)

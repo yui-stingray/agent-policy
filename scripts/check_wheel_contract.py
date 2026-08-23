@@ -5,6 +5,7 @@ Why: editable installs can hide packaging mistakes; releases must prove the whee
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import tempfile
 import textwrap
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
+RUNTIME_LOCK = ROOT / "requirements" / "runtime-contract.txt"
 EXPECTED_EXPORTS = {
     "evaluate",
     "load_policy_file",
@@ -52,19 +54,58 @@ def run(command: list[str], *, cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def dist_artifact_digests() -> dict[str, str]:
+    """Return SHA-256 digests for the complete top-level dist artifact set."""
+    digests: dict[str, str] = {}
+    for artifact in sorted(DIST.iterdir()):
+        if artifact.is_symlink() or not artifact.is_file():
+            raise RuntimeError("distribution artifacts contain an unsupported entry")
+        digest = hashlib.sha256()
+        with artifact.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digests[artifact.name] = digest.hexdigest()
+    return digests
+
+
+def verify_dist_artifacts_unchanged(expected: dict[str, str]) -> None:
+    """Reject any distribution artifact content or set change during the smoke."""
+    if dist_artifact_digests() != expected:
+        raise RuntimeError("distribution artifacts changed during wheel contract")
+
+
 def main() -> int:
     """Verify the built wheel in an isolated environment."""
 
     version = project_version()
     wheel = find_wheel(version)
-    with tempfile.TemporaryDirectory(prefix="agent-policy-wheel-") as temp_dir:
-        temp = Path(temp_dir)
-        venv_dir = temp / "venv"
-        venv.EnvBuilder(with_pip=True).create(venv_dir)
-        python = venv_dir / "bin" / "python"
-        run([str(python), "-m", "pip", "install", "--quiet", str(wheel)], cwd=temp)
-        smoke = textwrap.dedent(
-            f"""
+    artifacts_before_smoke = dist_artifact_digests()
+    try:
+        with tempfile.TemporaryDirectory(prefix="agent-policy-wheel-") as temp_dir:
+            temp = Path(temp_dir)
+            venv_dir = temp / "venv"
+            venv.EnvBuilder(with_pip=True).create(venv_dir)
+            python = venv_dir / "bin" / "python"
+            run(
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--quiet",
+                    "--require-hashes",
+                    "--only-binary=:all:",
+                    "-r",
+                    str(RUNTIME_LOCK),
+                ],
+                cwd=temp,
+            )
+            run(
+                [str(python), "-m", "pip", "install", "--quiet", "--no-deps", str(wheel)],
+                cwd=temp,
+            )
+            smoke = textwrap.dedent(
+                f"""
             import agent_policy
             from importlib import resources
             import json
@@ -164,9 +205,11 @@ def main() -> int:
                 "maxLength": 1024,
                 "pattern": "^[^/\\\\u0000-\\\\u001F][^\\\\u0000-\\\\u001F]*$(?![\\\\s\\\\S])",
             }}
-            """
-        )
-        run([str(python), "-I", "-c", smoke], cwd=temp)
+                """
+            )
+            run([str(python), "-I", "-c", smoke], cwd=temp)
+    finally:
+        verify_dist_artifacts_unchanged(artifacts_before_smoke)
 
     print(f"wheel contract OK: {wheel.name}")
     return 0
