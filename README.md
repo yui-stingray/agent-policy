@@ -141,7 +141,9 @@ Decisions are evaluated in this order:
 2. **Repo policy match** — every `[[repo_policy]]` entry for the requested
    repo is scanned (optionally gated by `ownership_class`). The first
    entry that declares the capability wins. Splitting a repo's policy
-   across multiple entries is supported.
+   across multiple entries is supported. Entries that can both match the
+   same repo, ownership class, and capability must declare the same mode;
+   contradictory overlaps fail validation instead of depending on list order.
 3. **`default_mode` fallback** — used when no repo policy declares the
    capability. Defaults to `require_approval` if unset.
 
@@ -261,6 +263,9 @@ Unknown top-level fields or typos inside `[[repo_policy]]` fail loudly
 with a `pydantic.ValidationError` — there is no silent degradation.
 `ownership_class` is a closed optional gate: it accepts only `internal` or
 `external`; omit it (or use `None` in Python) to match either ownership class.
+Overlapping entries may split capabilities or repeat the same mode, but a
+wildcard or ownership-specific overlap that assigns different modes to the
+same capability is rejected.
 
 ## Wrapper pattern
 

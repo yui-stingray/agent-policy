@@ -7,6 +7,10 @@ package is still alpha.
 
 ## Unreleased
 
+- Rejected contradictory overlapping `repo_policy` entries at validation and
+  evaluation boundaries so authorization cannot depend on entry order.
+- Hash-locked the complete Python 3.12 Linux release build toolchain and made
+  CI and release builds use the same non-isolated dependency set.
 - Closed `RepoPolicy.ownership_class` to `internal` or `external` (with `None`
   as the wildcard), and made direct `PolicyAuditEvent(...)` construction copy,
   validate, and freeze context like `build_audit_event()`.
