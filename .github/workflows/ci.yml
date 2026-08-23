@@ -1,6 +1,6 @@
 # Where: .github/workflows/ci.yml
-# What: run pytest on every push to master and every PR, with a one-off
-#       packaging sanity check on the 3.12 matrix leg.
+# What: run pytest on every push to master and every PR, with an isolated
+#       release-toolchain packaging contract.
 # Why: release.yml only fires on tag push, so day-to-day edits have no
 #      safety net. This workflow is that net — cheap, fast, and catches
 #      both test regressions and metadata/packaging drift before a tag
@@ -9,9 +9,9 @@
 # Notes:
 # - The 3.11 / 3.12 matrix matches `requires-python = ">=3.11"` in
 #   pyproject.toml. Bump both together if the floor ever moves.
-# - `python -m build` + `twine check` run only on the 3.12 leg because
-#   the sdist/wheel output does not depend on the host Python version.
-#   Running it on every leg would just burn CI minutes.
+# - `python -m build` + `twine check` run once in the dedicated Python 3.12
+#   release-contract job because the sdist/wheel output does not depend on
+#   the host Python version.
 
 name: ci
 
@@ -36,6 +36,29 @@ jobs:
           persist-credentials: false
       - uses: devops-actions/actionlint@469810fd82c015d3c43815cd2b0e4d02eecc4819  # v0.1.11
 
+  release-contract:
+    name: release toolchain contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: '3.12'
+      - name: Install locked release build tools
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          -r requirements/release-tools.txt
+      - name: Verify release tool dependency consistency
+        run: python -m pip check
+      - name: Build sdist + wheel
+        run: python -m build --no-isolation
+      - name: Verify metadata (twine check)
+        run: python -m twine check dist/*
+      - name: Verify wheel public contract
+        run: python scripts/check_wheel_contract.py
+
   test:
     name: pytest (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -58,15 +81,21 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Install build + twine
-        if: matrix.python-version == '3.12'
-        run: pip install --upgrade build twine
-      - name: Build sdist + wheel
-        if: matrix.python-version == '3.12'
-        run: python -m build
-      - name: Verify metadata (twine check)
-        if: matrix.python-version == '3.12'
-        run: python -m twine check dist/*
-      - name: Verify wheel public contract
-        if: matrix.python-version == '3.12'
-        run: python scripts/check_wheel_contract.py
+  required-ci:
+    name: agent-policy required CI
+    if: ${{ always() }}
+    needs:
+      - actionlint
+      - release-contract
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI contract to pass
+        env:
+          ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
+          RELEASE_CONTRACT_RESULT: ${{ needs.release-contract.result }}
+          PYTEST_MATRIX_RESULT: ${{ needs.test.result }}
+        run: |
+          test "$ACTIONLINT_RESULT" = "success"
+          test "$RELEASE_CONTRACT_RESULT" = "success"
+          test "$PYTEST_MATRIX_RESULT" = "success"

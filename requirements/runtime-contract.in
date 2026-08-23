@@ -1,0 +1,3 @@
+# Direct runtime dependency contract for the isolated wheel smoke. Keep this
+# exact pin and its Python 3.12 Linux hash lock in sync with the wheel contract.
+pydantic==2.13.4

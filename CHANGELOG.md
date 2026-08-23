@@ -7,6 +7,22 @@ package is still alpha.
 
 ## Unreleased
 
+- Identified the stricter current source as `0.1.12.dev0`, distinct from the
+  latest public PyPI release `0.1.11`, so built unreleased artifacts cannot
+  reuse the published version identity.
+- Clarified that `agent-guard` is the standalone static entry point and
+  `agent-policy` is an optional advanced runtime companion; the toolkit example
+  remains a reference integration rather than required setup.
+- Rejected contradictory overlapping `repo_policy` entries at validation and
+  evaluation boundaries so authorization cannot depend on entry order.
+- Revalidated caller-held `PolicyMatrix` instances at every evaluation boundary
+  so post-construction mutation cannot introduce an invalid decision mode.
+- Hash-locked the complete Python 3.12 Linux release build toolchain and made
+  CI and release builds use the same non-isolated dependency set.
+- Hash-locked the isolated wheel smoke's runtime dependency closure, installed
+  the local wheel without dependency resolution, verified its installed
+  dependency metadata, and ensured smoke execution cannot silently change the
+  built distribution set or contents.
 - Closed `RepoPolicy.ownership_class` to `internal` or `external` (with `None`
   as the wildcard), and made direct `PolicyAuditEvent(...)` construction copy,
   validate, and freeze context like `build_audit_event()`.

@@ -74,7 +74,7 @@ def evaluate(
 
 def _coerce(policy: PolicyMatrix | Mapping[str, Any]) -> PolicyMatrix:
     if isinstance(policy, PolicyMatrix):
-        return policy
+        return PolicyMatrix.model_validate(policy.model_dump())
     return PolicyMatrix.model_validate(policy)
 
 

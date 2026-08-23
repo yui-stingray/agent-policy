@@ -251,6 +251,167 @@ def test_split_repo_policy_missing_capability_uses_default_mode() -> None:
     assert decision.matched_repo == "acme/app"
 
 
+@pytest.mark.parametrize("broad_rule_first", [True, False])
+def test_conflicting_wildcard_and_external_rules_are_rejected_in_either_order(
+    broad_rule_first: bool,
+) -> None:
+    broad_rule = RepoPolicy(
+        repo="acme/app",
+        capabilities={"shell": "auto_allow"},
+    )
+    external_rule = RepoPolicy(
+        repo="acme/app",
+        ownership_class="external",
+        capabilities={"shell": "deny"},
+    )
+    rules = (
+        [broad_rule, external_rule]
+        if broad_rule_first
+        else [external_rule, broad_rule]
+    )
+
+    with pytest.raises(ValidationError, match="overlap with conflicting modes"):
+        PolicyMatrix(repo_policy=rules)
+
+
+def test_conflicting_rules_with_the_same_ownership_class_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="overlap with conflicting modes"):
+        PolicyMatrix(
+            repo_policy=[
+                RepoPolicy(
+                    repo="acme/app",
+                    ownership_class="internal",
+                    capabilities={"shell": "auto_allow"},
+                ),
+                RepoPolicy(
+                    repo="acme/app",
+                    ownership_class="internal",
+                    capabilities={"shell": "require_approval"},
+                ),
+            ]
+        )
+
+
+def test_overlapping_rules_with_the_same_mode_remain_valid() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                capabilities={"read": "auto_allow"},
+            ),
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class="external",
+                capabilities={"read": "auto_allow"},
+            ),
+        ]
+    )
+
+    decision = evaluate(
+        policy,
+        repo="acme/app",
+        capability="read",
+        context={"ownership_class": "external"},
+    )
+
+    assert decision.mode == "auto_allow"
+    assert decision.reason == "repo_policy"
+
+
+def test_conflicting_modes_for_disjoint_ownership_classes_remain_valid() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class="internal",
+                capabilities={"shell": "auto_allow"},
+            ),
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class="external",
+                capabilities={"shell": "deny"},
+            ),
+        ]
+    )
+
+    internal = evaluate(
+        policy,
+        repo="acme/app",
+        capability="shell",
+        context={"ownership_class": "internal"},
+    )
+    external = evaluate(
+        policy,
+        repo="acme/app",
+        capability="shell",
+        context={"ownership_class": "external"},
+    )
+
+    assert internal.mode == "auto_allow"
+    assert external.mode == "deny"
+
+
+def test_evaluate_rejects_conflict_introduced_after_matrix_validation() -> None:
+    internal_rule = RepoPolicy(
+        repo="acme/app",
+        ownership_class="internal",
+        capabilities={"shell": "auto_allow"},
+    )
+    policy = PolicyMatrix(
+        repo_policy=[
+            internal_rule,
+            RepoPolicy(
+                repo="acme/app",
+                ownership_class="external",
+                capabilities={"shell": "deny"},
+            ),
+        ]
+    )
+    internal_rule.ownership_class = None
+
+    with pytest.raises(ValueError, match="overlap with conflicting modes"):
+        evaluate(
+            policy,
+            repo="acme/app",
+            capability="shell",
+            context={"ownership_class": "external"},
+        )
+
+
+def test_evaluate_rejects_invalid_capability_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(repo="acme/app", capabilities={"commit": "auto_allow"})
+        ]
+    )
+    policy.repo_policy[0].capabilities["commit"] = "invalid"  # type: ignore[assignment]
+
+    with pytest.raises(ValidationError, match="capabilities"):
+        evaluate(policy, repo="acme/app", capability="commit")
+
+
+def test_evaluate_rejects_invalid_default_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(default_mode="require_approval")
+    policy.default_mode = "invalid"  # type: ignore[assignment]
+
+    with pytest.raises(ValidationError, match="default_mode"):
+        evaluate(policy, repo="acme/app", capability="read")
+
+
+def test_evaluate_accepts_valid_capability_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(repo="acme/app", capabilities={"commit": "auto_allow"})
+        ]
+    )
+    policy.repo_policy[0].capabilities["commit"] = "deny"
+
+    decision = evaluate(policy, repo="acme/app", capability="commit")
+
+    assert decision.mode == "deny"
+    assert decision.reason == "repo_policy"
+
+
 def test_ownership_class_match_uses_repo_policy() -> None:
     policy = PolicyMatrix(
         default_mode="require_approval",
@@ -456,4 +617,30 @@ ownership_class = "interanl"
     )
 
     with pytest.raises(ValidationError, match="ownership_class"):
+        load_policy_file(toml_path)
+
+
+def test_load_policy_file_rejects_conflicting_overlapping_rules(
+    tmp_path: Path,
+) -> None:
+    toml_path = tmp_path / "conflicting-policy.toml"
+    toml_path.write_text(
+        """
+[[repo_policy]]
+repo = "acme/app"
+
+[repo_policy.capabilities]
+shell = "auto_allow"
+
+[[repo_policy]]
+repo = "acme/app"
+ownership_class = "external"
+
+[repo_policy.capabilities]
+shell = "deny"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="overlap with conflicting modes"):
         load_policy_file(toml_path)
