@@ -7,6 +7,8 @@ package is still alpha.
 
 ## Unreleased
 
+## 0.1.12 - 2026-08-23
+
 - Made the example capability mapper fail closed on active unquoted Bash brace
   expansion before `shlex` tokenization, including expansions assembled across
   exact backslash-LF continuations and escaped comment boundaries, while
@@ -19,9 +21,9 @@ package is still alpha.
   `ownership_class` values, and non-boolean `first_write_to_repo` values now
   raise before policy fallback, while falsey mappings are copied and extra
   context keys remain supported.
-- Identified the stricter current source as `0.1.12.dev0`, distinct from the
-  latest public PyPI release `0.1.11`, so built unreleased artifacts cannot
-  reuse the published version identity.
+- Kept unreleased builds on `0.1.12.dev0`, distinct from public `0.1.11`, so
+  development artifacts could not reuse a published identity before this final
+  `0.1.12` release.
 - Clarified that `agent-guard` is the standalone static entry point and
   `agent-policy` is an optional advanced runtime companion; the toolkit example
   remains a reference integration rather than required setup.

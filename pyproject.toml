@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yui-agent-policy"
-version = "0.1.12.dev0"
+version = "0.1.12"
 description = "Pure-function policy matrix evaluator for AI coding agents (repo x capability x context -> deny/require_approval/auto_allow)."
 readme = "README.md"
 requires-python = ">=3.11"
