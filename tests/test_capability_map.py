@@ -275,6 +275,11 @@ EOF""",
         "git push --fo[] origin main",
         "PATTERN=* git status",
         "SECOND=? FIRST=* git status",
+        "echo hi\nPATTERN=* git status",
+        "X=$((2*3)) git status",
+        "X=pre$((2*3))post git status",
+        "X=$((1+(2*3))) git status",
+        "X=pre$((1+(2*3)))post git status",
         "printf '%s' $[2*3]",
     ],
 )
@@ -360,6 +365,16 @@ def test_force_push_is_detected(command: str) -> None:
         ("sudo FOO=bar git push --force origin main", "unknown"),
         (
             'P=-exec; find . "$P" git push --force origin main \\;',
+            "unknown",
+        ),
+        (
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push "
+            "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
+            "unknown",
+        ),
+        (
+            "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push "
+            "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
             "unknown",
         ),
     ],

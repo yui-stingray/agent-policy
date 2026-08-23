@@ -63,6 +63,10 @@ FAIL_CLOSED_COMMAND_FORMS = (
     'P=-exec; find . "$P" git push --force origin main \\;',
     "stdbuf -oL git push --force origin main",
     'runner=git; stdbuf -oL "$runner" push --force origin main',
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push "
+    "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
+    "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push "
+    "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
 )
 BASH_LINE_CONTINUATION = "\\" + "\n"
 BACKSLASH_CRLF = "\\" + "\r\n"

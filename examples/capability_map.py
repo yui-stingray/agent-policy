@@ -240,7 +240,8 @@ def map_command(command: str, _depth: int = 0) -> str:
             return "unknown"
         if _contains_active_unquoted_pathname_expansion(active_source):
             return "unknown"
-        tokens = _tokenize(_separate_unquoted_newlines(active_source))
+        token_source = _mask_arithmetic_expansions_for_tokenization(active_source)
+        tokens = _tokenize(_separate_unquoted_newlines(token_source))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
         # unterminated heredoc makes the bounded parser uncertain. A hook
@@ -299,6 +300,51 @@ def _separate_unquoted_newlines(command: str) -> str:
             # Put the marker after the newline so it is outside a preceding
             # shell comment. Existing operator tokens still flush harmlessly.
             out.append(";")
+        index += 1
+    return "".join(out)
+
+
+def _mask_arithmetic_expansions_for_tokenization(command: str) -> str:
+    """Keep ``$((...))`` inside one shell word when shlex tokenizes it."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            out.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            out.append(command[index : index + 2])
+            index += 2
+            continue
+        if char == "#" and quote is None and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                out.append(command[index:])
+                break
+            out.append(command[index:newline])
+            index = newline
+            continue
+        if char == "'" and quote is None:
+            out.append(char)
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            out.append(char)
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$((", index):
+            end = _skip_arithmetic_expression(command, index + 3)
+            out.append("__AGENT_POLICY_ARITHMETIC__")
+            index = end
+            continue
+        out.append(char)
         index += 1
     return "".join(out)
 
@@ -478,6 +524,8 @@ def _contains_active_unquoted_pathname_expansion(command: str) -> bool:
                     command[word_start:index]
                 )
                 word_start = None
+            if char == "\n":
+                command_seen = False
             index += 1
             continue
         if char in ";|&()":
@@ -520,7 +568,7 @@ def _contains_active_unquoted_pathname_expansion(command: str) -> bool:
 
 def _skip_arithmetic_expression(command: str, index: int) -> int:
     """Return the offset after a bounded arithmetic expression, if present."""
-    depth = 1
+    group_depth = 0
     quote: str | None = None
     while index < len(command):
         char = command[index]
@@ -544,16 +592,18 @@ def _skip_arithmetic_expression(command: str, index: int) -> int:
             quote = char
             index += 1
             continue
-        if command.startswith("((", index):
-            depth += 1
-            index += 2
+        if char == "(":
+            group_depth += 1
+            index += 1
             continue
-        if command.startswith("))", index):
-            depth -= 1
-            index += 2
-            if depth == 0:
-                return index
-            continue
+        if char == ")":
+            if group_depth:
+                group_depth -= 1
+                index += 1
+                continue
+            if command.startswith("))", index):
+                return index + 2
+            return len(command)
         index += 1
     return len(command)
 
@@ -1110,6 +1160,11 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     # Skip leading env assignments: ``FOO=bar git push --force``.
     i = 0
     while i < len(tokens) and _is_env_assignment(tokens[i]):
+        if _is_git_config_assignment(tokens[i]):
+            # Git reads GIT_CONFIG* assignments before it resolves push
+            # defaults and aliases. Their effects are outside this static argv
+            # model and may hide a force refspec from the visible command.
+            return "unknown"
         i += 1
     tokens = tokens[i:]
     if not tokens:
@@ -1321,7 +1376,12 @@ def _env_command_start(args: list[str]) -> int | None:
         arg = args[index]
         if arg == "--":
             return index + 1
-        if _is_env_assignment(arg) or arg in {"-0", "-i", "--ignore-environment", "--null"}:
+        if _is_env_assignment(arg):
+            if _is_git_config_assignment(arg):
+                return None
+            index += 1
+            continue
+        if arg in {"-0", "-i", "--ignore-environment", "--null"}:
             index += 1
             continue
         if arg in {"-C", "-u", "--chdir", "--unset"}:
@@ -1410,6 +1470,12 @@ def _is_env_assignment(token: str) -> bool:
     if not head or head[0].isdigit():
         return False
     return all(c.isalnum() or c == "_" for c in head)
+
+
+def _is_git_config_assignment(token: str) -> bool:
+    """Whether a leading assignment can mutate Git's effective config."""
+    name = token.split("=", 1)[0]
+    return name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_")
 
 
 def _stricter(a: str, b: str) -> str:

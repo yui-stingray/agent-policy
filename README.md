@@ -403,7 +403,9 @@ shell commands.
   `eval` wrappers. Active unquoted brace or pathname expansion, selected visible
   `xargs` and `find -exec`-style argv generation, and Git subcommands
   outside that allowlist (including `config` alias mutation) map to
-  `unknown`. A standalone `-exec`, `-execdir`, `-ok`, or `-okdir` token in
+  `unknown`. Leading `GIT_CONFIG*` assignments also map to `unknown` because
+  they can change push defaults or aliases before visible argv is evaluated.
+  A standalone `-exec`, `-execdir`, `-ok`, or `-okdir` token in
   `find` argv is conservatively blocked even when it could be another
   primary's value; the example does not model full `find` expression arity.
   Unresolved parameter expansion anywhere in `find` argv is rejected for the
