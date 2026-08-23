@@ -378,6 +378,40 @@ def test_evaluate_rejects_conflict_introduced_after_matrix_validation() -> None:
         )
 
 
+def test_evaluate_rejects_invalid_capability_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(repo="acme/app", capabilities={"commit": "auto_allow"})
+        ]
+    )
+    policy.repo_policy[0].capabilities["commit"] = "invalid"  # type: ignore[assignment]
+
+    with pytest.raises(ValidationError, match="capabilities"):
+        evaluate(policy, repo="acme/app", capability="commit")
+
+
+def test_evaluate_rejects_invalid_default_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(default_mode="require_approval")
+    policy.default_mode = "invalid"  # type: ignore[assignment]
+
+    with pytest.raises(ValidationError, match="default_mode"):
+        evaluate(policy, repo="acme/app", capability="read")
+
+
+def test_evaluate_accepts_valid_capability_mode_introduced_after_matrix_validation() -> None:
+    policy = PolicyMatrix(
+        repo_policy=[
+            RepoPolicy(repo="acme/app", capabilities={"commit": "auto_allow"})
+        ]
+    )
+    policy.repo_policy[0].capabilities["commit"] = "deny"
+
+    decision = evaluate(policy, repo="acme/app", capability="commit")
+
+    assert decision.mode == "deny"
+    assert decision.reason == "repo_policy"
+
+
 def test_ownership_class_match_uses_repo_policy() -> None:
     policy = PolicyMatrix(
         default_mode="require_approval",
