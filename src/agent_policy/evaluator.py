@@ -23,7 +23,7 @@ from typing import Any
 
 from .decision import PolicyDecision
 from .guardrails import _evaluate_hard_guardrails
-from .matrix import PolicyMatrix, RepoPolicy
+from .matrix import PolicyMatrix, RepoPolicy, _validate_repo_policy_consistency
 
 
 def evaluate(
@@ -74,6 +74,7 @@ def evaluate(
 
 def _coerce(policy: PolicyMatrix | Mapping[str, Any]) -> PolicyMatrix:
     if isinstance(policy, PolicyMatrix):
+        _validate_repo_policy_consistency(policy.repo_policy)
         return policy
     return PolicyMatrix.model_validate(policy)
 
