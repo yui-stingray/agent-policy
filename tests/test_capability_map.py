@@ -215,6 +215,14 @@ def test_logical_line_comment_boundaries(command: str, expected: str) -> None:
         "A='x[$(git push --force origin main)0]'; name='x[A]'; : ${!name}",
         "A='x[$(git push --force origin main)0]'; "
         "value=abc; : ${value:-${value:A}}",
+        "A='x[$(git push --force origin main)0]'; echo \"${missing:-$((A))}\"",
+        "A='x[$(git push --force origin main)0]'; "
+        "echo \"${missing:-'$((A))'}\"",
+        "A='x[$(git push --force origin main)0]'; echo \"${present:+$((A))}\"",
+        "A='x[$(git push --force origin main)0]'; echo \"${missing:=$((A))}\"",
+        "A='x[$(git push --force origin main)0]'; echo \"${missing:?$((A))}\"",
+        "A='x[$(git push --force origin main)0]'; echo \"${value/x/$((A))}\"",
+        "A='x[$(git push --force origin main)0]'; echo \"${missing:-$[A]}\"",
         'echo "$((A))"',
         "cat <<EOF\n$((A))\nEOF",
         "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
@@ -239,6 +247,8 @@ def test_active_arithmetic_returns_unknown(command: str) -> None:
         "cat <<EOF\n\\$\\\n((A))\nEOF",
         "value=abc; printf '%s' \"${value:-safe}\"",
         "value=abc; printf '%s' \"${value:-[safe]}\"",
+        "printf '%s' \"${missing:-\\$((A))}\"",
+        "printf '%s' \"${missing:-((safe))}\"",
         "option=v; printf '%s' \"-$option\"",
     ],
 )
@@ -249,6 +259,14 @@ def test_literal_arithmetic_forms_remain_shell(command: str) -> None:
 def test_arithmetic_command_with_nested_substitution_is_unknown() -> None:
     assert map_command("((x = 1 << 2))") == "unknown"
     assert map_command("((x = $(printf 1) << 2))") == "unknown"
+
+
+def test_deep_parameter_expansion_word_is_processed_once_per_level() -> None:
+    word = "safe"
+    for _ in range(20):
+        word = "${v:-" + word + "}"
+
+    assert map_command(f'printf %s "{word}"') == "shell"
 
 
 def test_expanding_heredoc_delimiter_uses_logical_lines() -> None:

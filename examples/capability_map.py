@@ -516,52 +516,67 @@ def _contains_active_arithmetic_expansion(command: str) -> bool:
 
 def _parameter_expansion_has_arithmetic_context(body: str) -> bool:
     """Whether a parameter expansion contains a bounded arithmetic context."""
-    if body.startswith("!"):
-        # Indirect expansion can resolve a caller-controlled value to an
-        # indexed-array reference whose subscript is evaluated arithmetically.
-        return True
+    pending = [body]
+    while pending:
+        current = pending.pop()
+        if current.startswith("!"):
+            # Indirect expansion can resolve a caller-controlled value to an
+            # indexed-array reference whose subscript is evaluated arithmetically.
+            return True
+        if _parameter_word_has_active_arithmetic(current):
+            return True
 
-    # Inspect nested parameter expansions before identifying the outer
-    # parameter's operator.
-    nested = 0
-    while True:
-        nested = body.find("${", nested)
-        if nested < 0:
-            break
-        end = _skip_parameter_expansion(body, nested)
-        if _parameter_expansion_has_arithmetic_context(
-            body[nested + 2 : max(nested + 2, end - 1)]
+        index = 0
+        if index < len(current) and current[index] == "#":
+            index += 1
+        if index >= len(current):
+            continue
+        if current[index] in "@*#?$!-":
+            index += 1
+        elif current[index].isdigit():
+            while index < len(current) and current[index].isdigit():
+                index += 1
+        elif current[index].isalpha() or current[index] == "_":
+            index += 1
+            while index < len(current) and (
+                current[index].isalnum() or current[index] == "_"
+            ):
+                index += 1
+        else:
+            continue
+
+        # An indexed-array subscript immediately following the parameter name
+        # is arithmetic. Brackets in an operator word remain ordinary data.
+        if index < len(current) and current[index] == "[":
+            return True
+        remainder = current[index:]
+        if bool(remainder.startswith(":")) and (
+            len(remainder) == 1 or remainder[1] not in "-=?+"
         ):
             return True
-        nested = max(end, nested + 2)
 
+        nested = 0
+        while True:
+            nested = current.find("${", nested)
+            if nested < 0:
+                break
+            end = _skip_parameter_expansion(current, nested)
+            pending.append(current[nested + 2 : max(nested + 2, end - 1)])
+            nested = max(end, nested + 2)
+    return False
+
+
+def _parameter_word_has_active_arithmetic(body: str) -> bool:
+    """Detect unescaped arithmetic expansion in a parameter operator word."""
     index = 0
-    if index < len(body) and body[index] == "#":
+    while index < len(body):
+        if body[index] == "\\":
+            index += 2
+            continue
+        if body.startswith("$((", index) or body.startswith("$[", index):
+            return True
         index += 1
-    if index >= len(body):
-        return False
-    if body[index] in "@*#?$!-":
-        index += 1
-    elif body[index].isdigit():
-        while index < len(body) and body[index].isdigit():
-            index += 1
-    elif body[index].isalpha() or body[index] == "_":
-        index += 1
-        while index < len(body) and (body[index].isalnum() or body[index] == "_"):
-            index += 1
-    else:
-        return False
-
-    # An indexed-array subscript immediately following the parameter name is
-    # arithmetic. Brackets in a default value or replacement pattern remain
-    # ordinary data and are not rejected by this bounded check.
-    if index < len(body) and body[index] == "[":
-        return True
-
-    remainder = body[index:]
-    return bool(remainder.startswith(":")) and (
-        len(remainder) == 1 or remainder[1] not in "-=?+"
-    )
+    return False
 
 
 def _contains_active_unquoted_brace_expansion(command: str) -> bool:

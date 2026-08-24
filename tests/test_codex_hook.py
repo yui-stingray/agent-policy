@@ -80,6 +80,9 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "A='x[$(git push --force origin main)0]'; opt=v; "
     "builtin printf -$opt 'x[A]' '%s' ok",
     "A='x[$(git push --force origin main)0]'; value=abc; : ${value:A}",
+    "A='x[$(git push --force origin main)0]'; echo \"${missing:-$((A))}\"",
+    "A='x[$(git push --force origin main)0]'; "
+    "echo \"${missing:-'$((A))'}\"",
     "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
     "$\\\n((A))\nEOF",
     "A='x[$(git push --force origin main)0]'; true & wait -n -p 'x[A]'",
