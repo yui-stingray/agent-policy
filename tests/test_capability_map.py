@@ -431,12 +431,76 @@ def test_force_push_is_detected(command: str) -> None:
         "set -a",
         "set -o allexport",
         "set -o nounset -a",
+        "SHELLOPTS=allexport bash -c 'echo SAFE'",
+        "env SHELLOPTS=allexport bash -c 'echo SAFE'",
+        "export SHELLOPTS=allexport; bash -c 'echo SAFE'",
+        "bash -ac 'echo SAFE'",
+        "bash -o allexport -c 'echo SAFE'",
+        "bash -ac 'sleep .05 & p=$!; printf SAFE >\"$p\"; "
+        "wait -n -p BASH_ENV; bash -c :'",
         "set -a; printf -v BASH_ENV /dev/stdin; bash -c 'echo SAFE'",
         "read BASH_ENV <<< /dev/stdin; bash -c 'echo SAFE'",
     ],
 )
 def test_shell_startup_selector_assignments_return_unknown(command: str) -> None:
     assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "A='x[$(git push --force origin main)0]'; true & wait -n -p 'x[A]'",
+        "wait -p 'x[A]' -n",
+        'wait -p "$target" -n',
+        "wait -p -n",
+        "wait -p job_id -n",
+        "wait -pjob_id -n",
+        "wait -nf -p job_id",
+    ],
+)
+def test_wait_p_assignments_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "wait",
+        "wait -n",
+        "wait -- -p",
+    ],
+)
+def test_wait_without_assignment_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "trap ':' DEBUG",
+        "trap 'export BASH_ENV=/tmp/agent-policy-startup' DEBUG; "
+        "bash -c 'echo SAFE'",
+        "trap 'export BASH_ENV=/tmp/agent-policy-startup' EXIT",
+        'trap -p "$signal"',
+    ],
+)
+def test_trap_mutation_and_dynamic_queries_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "trap",
+        "trap -p",
+        "trap -p DEBUG",
+        "trap -lp DEBUG",
+        "trap -l",
+        "printf '%s\\n' \"trap 'export BASH_ENV=/tmp/agent-policy-startup' DEBUG\"",
+    ],
+)
+def test_literal_trap_queries_and_data_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
 
 
 @pytest.mark.parametrize(

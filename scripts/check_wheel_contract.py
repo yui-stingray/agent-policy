@@ -34,6 +34,7 @@ EXPECTED_EXPORTS = {
 }
 EXPECTED_SDIST_EXAMPLES = {
     "examples/capability_map.py": False,
+    "examples/check.py": False,
     "examples/claude_code_hook.sh": True,
     "examples/codex_hook.sh": True,
     "examples/codex_permission_request_hook.sh": True,

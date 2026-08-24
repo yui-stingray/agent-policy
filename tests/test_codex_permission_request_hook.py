@@ -87,6 +87,11 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "A='x[$(git push --force origin main)0]'; value=abc; : ${value:A}",
     "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
     "$\\\n((A))\nEOF",
+    "A='x[$(git push --force origin main)0]'; true & wait -n -p 'x[A]'",
+    "bash -ac 'sleep .05 & p=$!; printf SAFE >\"$p\"; "
+    "wait -n -p BASH_ENV; bash -c :'",
+    "printf 'git push --force origin main\\n' | "
+    'bash -c "trap \'export BASH_ENV=/dev/stdin\' DEBUG; bash -c \'echo SAFE\'"',
     "BASH_ENV=/dev/stdin bash -c 'echo SAFE' "
     "<<< 'git push --force origin main'",
     "BASH_ENV=reviewed-startup.sh bash -c 'echo SAFE'",

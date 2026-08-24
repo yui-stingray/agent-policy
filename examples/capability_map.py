@@ -48,7 +48,8 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             ``push.force`` from the hook.
 
          8. Returning ``unknown`` for malformed, ambiguous, incomplete, or
-            unmodeled execution syntax. Hooks must reject ``unknown`` rather
+            unmodeled execution syntax, including trap mutation and
+            ``wait -p`` assignment. Hooks must reject ``unknown`` rather
             than passing it to policy fallback.
 
          9. Returning unknown for active command and arithmetic expansion.
@@ -63,9 +64,10 @@ from stdout. ``main`` also accepts the command on stdin when no argv
 is given, which is convenient for piping from ``jq``.
 
 Scope: this is deliberately narrow. Full shell semantics (background jobs,
-function definitions) are not modeled. Active command and process substitution,
-arithmetic expansion, visible dynamic argv execution, and Git subcommands outside a
-small builtin allowlist are rejected as ``unknown`` rather than parsed.
+function definitions, and trap mutation) are not modeled. Active command and
+process substitution, arithmetic expansion, visible dynamic argv execution, and
+Git subcommands outside a small builtin allowlist are rejected as ``unknown``
+rather than parsed.
 Clear commands outside the narrow patterns fall back to ``shell``. Syntax
 the helper cannot parse confidently returns ``unknown`` so a wrapper can
 fail closed before policy evaluation.
@@ -113,6 +115,11 @@ _SHELL_STARTUP_FILE_SELECTORS = frozenset(
     {"BASH_ENV", "ENV", "ZDOTDIR"}
 )
 
+# SHELLOPTS can import allexport into a child Bash process. That state can turn
+# a later shell assignment into an exported startup-file selector, which this
+# bounded parser cannot track.
+_SHELL_STARTUP_STATE_SELECTORS = frozenset({"SHELLOPTS"})
+
 # zsh reads system and user .zshenv files for every invocation, with HOME as
 # the fallback directory when ZDOTDIR is unset. That startup path cannot be
 # proven from command text, so zsh wrappers always fail closed.
@@ -136,6 +143,14 @@ _SHELL_INTEGER_DECLARATION_BUILTINS = frozenset(
 # These builtins interpret variable-name operands or mutate shell state using
 # semantics that can reach indexed-array arithmetic or startup selectors.
 _SHELL_UNMODELED_VARIABLE_BUILTINS = frozenset({"read", "unset"})
+
+# ``wait -p`` assigns through a variable name. Indexed-array targets evaluate
+# arithmetic recursively, while allexport can turn a scalar target into a later
+# shell startup selector. The parser therefore does not model any ``wait -p``.
+
+# ``trap -p`` and ``trap -l`` only inspect handler state. Every other trap form
+# can mutate later command execution and stays outside this bounded parser.
+_TRAP_READ_ONLY_OPTIONS = frozenset({"l", "p"})
 
 # Strictness ordering. When a compound command mixes capabilities
 # (e.g. ``git status && git push --force``), the strictest one wins —
@@ -245,7 +260,9 @@ _SHELL_SHORT_OPTIONS_WITHOUT_ARGUMENT = frozenset(
 )
 _SHELL_OPTIONS_WITH_VALUE = frozenset({"-o", "-O"})
 _SHELL_STARTUP_OPTIONS_WITH_VALUE = frozenset({"--init-file", "--rcfile"})
-_SHELL_STARTUP_SHORT_OPTIONS = frozenset({"i", "l"})
+# Interactive/login modes read startup files; allexport can export a selector
+# assigned later in the inspected command body.
+_SHELL_STARTUP_SHORT_OPTIONS = frozenset({"a", "i", "l"})
 
 
 class _CommandParseError(ValueError):
@@ -1393,6 +1410,12 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         return "unknown"
     if head_basename == "set" and _changes_allexport_state(tokens[1:]):
         return "unknown"
+    if head_basename == "wait" and _wait_has_unmodeled_variable_target(
+        tokens[1:]
+    ):
+        return "unknown"
+    if head_basename == "trap":
+        return "shell" if _is_literal_trap_query(tokens[1:]) else "unknown"
     if head_basename in _SHELL_ARITHMETIC_BUILTINS:
         return "unknown"
     if (
@@ -1566,6 +1589,8 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
         if arg in _SHELL_OPTIONS_WITH_VALUE:
             if j + 1 >= len(args):
                 return "unknown"
+            if arg == "-o" and args[j + 1] == "allexport":
+                return "unknown"
             j += 2
             continue
         if _is_shell_short_option_cluster(arg):
@@ -1588,7 +1613,7 @@ def _is_shell_short_option_cluster_with_c(arg: str) -> bool:
 
 
 def _shell_short_option_cluster_reads_startup_files(arg: str) -> bool:
-    """Whether a bounded short-option cluster enables startup-file loading."""
+    """Whether a short-option cluster enables unmodeled startup input."""
     return _is_shell_short_option_cluster(arg) and bool(
         _SHELL_STARTUP_SHORT_OPTIONS.intersection(arg[1:])
     )
@@ -1712,7 +1737,9 @@ def _has_force_flag(push_args: list[str]) -> bool:
 def _is_shell_startup_selector_assignment(token: str) -> bool:
     """Whether an assignment directly sets a modeled startup selector."""
     name = _shell_assignment_name(token)
-    return name in _SHELL_STARTUP_FILE_SELECTORS
+    return name in (
+        _SHELL_STARTUP_FILE_SELECTORS | _SHELL_STARTUP_STATE_SELECTORS
+    )
 
 
 def _has_evaluating_declaration_option(tokens: list[str]) -> bool:
@@ -1742,6 +1769,31 @@ def _has_arithmetic_variable_target(tokens: list[str]) -> bool:
         if any(marker in target for marker in ("[", "]", "$")):
             return True
     return False
+
+
+def _wait_has_unmodeled_variable_target(tokens: list[str]) -> bool:
+    """Whether ``wait`` assigns through the unmodeled ``-p`` option."""
+    for token in tokens:
+        if token == "--":
+            return False
+        if not token.startswith("-") or token == "-":
+            continue
+        if "p" in token[1:]:
+            return True
+    return False
+
+
+def _is_literal_trap_query(tokens: list[str]) -> bool:
+    """Whether ``trap`` only lists handlers using literal arguments."""
+    if not tokens:
+        return True
+    option = tokens[0]
+    return (
+        len(option) > 1
+        and option.startswith("-")
+        and set(option[1:]).issubset(_TRAP_READ_ONLY_OPTIONS)
+        and all("$" not in token for token in tokens[1:])
+    )
 
 
 def _printf_uses_variable_target(tokens: list[str]) -> bool:
@@ -1803,7 +1855,7 @@ def _is_shell_startup_selector_declaration(token: str) -> bool:
     """Whether a declaration token names a modeled startup selector."""
     return (
         _shell_assignment_name(token) or token
-    ) in _SHELL_STARTUP_FILE_SELECTORS
+    ) in (_SHELL_STARTUP_FILE_SELECTORS | _SHELL_STARTUP_STATE_SELECTORS)
 
 
 def _shell_assignment_name(token: str) -> str | None:

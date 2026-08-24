@@ -367,7 +367,7 @@ with `pip install -e .`; public users who need the released library should use
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
   produce a false `push.force` classification. Active arithmetic, active
-  unquoted brace or pathname expansion, shell startup-file selectors,
+  unquoted brace or pathname expansion, shell startup selectors and state,
   selected visible dynamic argv execution, and Git subcommands outside the
   bounded builtin allowlist become `unknown` and are rejected before policy
   evaluation. See the file header for the exact bounded flow: heredoc
@@ -411,7 +411,9 @@ shell commands.
   brace or pathname expansion, selected visible `xargs` and `find -exec`-style argv generation,
   and Git subcommands outside that allowlist (including
   `config` alias mutation) also map to `unknown`. Leading `GIT_CONFIG*`
-  assignments and shell startup-file selectors such as `BASH_ENV` map to
+  assignments and shell startup-file selectors such as `BASH_ENV`, imported
+  shell state through `SHELLOPTS`, allexport wrapper options, `wait -p`
+  assignment, and trap mutation map to
   `unknown` because they can change execution before visible argv is
   evaluated. Interactive/login shell modes and explicit `--rcfile` /
   `--init-file` inputs are also rejected because they execute startup files

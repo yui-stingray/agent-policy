@@ -300,28 +300,36 @@ def test_distribution_contract_verifies_sdist_examples(
 
 
 @pytest.mark.parametrize("mutation", ("missing", "content", "mode", "duplicate"))
+@pytest.mark.parametrize(
+    "mutation_target", ("examples/capability_map.py", "examples/check.py")
+)
 def test_distribution_contract_rejects_invalid_sdist_examples(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+    mutation_target: str,
 ) -> None:
     version = "0.0.0"
     source_root = tmp_path / "source"
     sdist = tmp_path / f"yui_agent_policy-{version}.tar.gz"
     entries: list[tuple[str, bytes, int]] = []
-    for index, (relative, executable) in enumerate(
-        check_wheel_contract.EXPECTED_SDIST_EXAMPLES.items()
-    ):
+    for relative, executable in check_wheel_contract.EXPECTED_SDIST_EXAMPLES.items():
         source = source_root / relative
         source.parent.mkdir(parents=True, exist_ok=True)
         payload = f"public example: {relative}\n".encode()
         source.write_bytes(payload)
-        if mutation == "missing" and index == 0:
+        if mutation == "missing" and relative == mutation_target:
             continue
-        archived = b"changed\n" if mutation == "content" and index == 0 else payload
+        archived = (
+            b"changed\n"
+            if mutation == "content" and relative == mutation_target
+            else payload
+        )
         mode = 0o755 if executable else 0o644
-        if mutation == "mode" and index == 0:
+        if mutation == "mode" and relative == mutation_target:
             mode = 0o755 if mode == 0o644 else 0o644
         entries.append((relative, archived, mode))
-        if mutation == "duplicate" and index == 0:
+        if mutation == "duplicate" and relative == mutation_target:
             entries.append((relative, b"duplicate\n", mode))
 
     with tarfile.open(sdist, mode="w:gz") as archive:
