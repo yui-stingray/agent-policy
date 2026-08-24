@@ -7,6 +7,19 @@ package is still alpha.
 
 ## Unreleased
 
+- Made the public example hooks fail closed on active output redirection,
+  ANSI-C quoted words, file-writing command heads such as `tee`, and every
+  `git push`, `git-push`, or `send-pack` form without an explicit visible force
+  option. A command-only classifier cannot prove effective refspec, mirror,
+  hook, helper, repository-selection, or TOCTOU state safe enough for `shell`
+  auto-allow.
+- Identified the stricter current source as `0.1.16.dev0`, distinct from the
+  latest public PyPI release `0.1.15`, so unreleased artifacts cannot reuse a
+  published version identity.
+- Documented that public `0.1.15` retains the prior command-text-only push
+  boundary; deployments using that version should not auto-allow `shell` or
+  default policy for push-capable example-hook inputs.
+
 ## 0.1.15 - 2026-08-24
 
 - Made the public example hooks fail closed on callback-bearing Bash builtins,
