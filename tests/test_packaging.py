@@ -11,7 +11,9 @@ publish-time mistakes into test failures instead of silent regressions.
 
 from __future__ import annotations
 
+import io
 import sys
+import tarfile
 import tomllib
 from pathlib import Path
 
@@ -25,7 +27,8 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 README = REPO_ROOT / "README.md"
 PACKAGE_DIR = REPO_ROOT / "src" / "agent_policy"
 SCHEMA_DIR = PACKAGE_DIR / "schemas"
-CURRENT_RELEASE_VERSION = "0.1.13"
+CURRENT_SOURCE_VERSION = "0.1.14.dev0"
+LATEST_PUBLIC_VERSION = "0.1.13"
 
 
 def _pyproject_version() -> str:
@@ -41,22 +44,25 @@ def test_package_version_matches_pyproject() -> None:
     assert agent_policy.__version__ == _pyproject_version()
 
 
-def test_release_identity_matches_readme_install_contract() -> None:
+def test_unreleased_source_identity_matches_readme_install_contract() -> None:
     readme = README.read_text(encoding="utf-8")
 
-    assert _pyproject_version() == CURRENT_RELEASE_VERSION
-    assert agent_policy.__version__ == CURRENT_RELEASE_VERSION
-    assert f"**Status**: `{CURRENT_RELEASE_VERSION}` alpha." in readme
-    assert "current unreleased source checkout" not in readme
-    assert readme.count(f"pip install yui-agent-policy=={CURRENT_RELEASE_VERSION}") == 2
+    assert _pyproject_version() == CURRENT_SOURCE_VERSION
+    assert agent_policy.__version__ == CURRENT_SOURCE_VERSION
+    assert (
+        f"**Status**: Unreleased source `{CURRENT_SOURCE_VERSION}`. "
+        "The latest public PyPI release is"
+    ) in readme
+    assert f"`yui-agent-policy=={LATEST_PUBLIC_VERSION}`" in readme
+    assert readme.count(f"pip install yui-agent-policy=={LATEST_PUBLIC_VERSION}") == 2
     assert "\npip install yui-agent-policy\n" not in readme
 
 
 def test_readme_provenance_download_uses_expected_local_filenames() -> None:
     readme = README.read_text(encoding="utf-8")
-    version = CURRENT_RELEASE_VERSION
+    version = LATEST_PUBLIC_VERSION
 
-    assert version == _pyproject_version()
+    assert version != _pyproject_version()
     assert f'version = "{version}"' in readme
     assert readme.count(f"--source-ref refs/tags/v{version}") == 2
     assert "(\nset -euo pipefail\nverify_dir=\"$(mktemp -d" in readme
@@ -151,6 +157,10 @@ def test_readme_codex_hook_docs_match_current_contract() -> None:
     assert "pathname expansion" in readme
     assert "bounded builtin allowlist" in readme
     assert "`xargs` and `find -exec`-style argv generation" in readme
+    assert "Active arithmetic is not interpreted" in readme
+    assert "shell startup-file selectors" in readme
+    assert "trailing arguments" in readme
+    assert "redirections are not" in readme
 
 
 def test_packaged_audit_event_schemas_are_present() -> None:
@@ -200,7 +210,9 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
 
     commands: list[tuple[list[str], Path]] = []
     wheel = tmp_path / "dist" / "yui_agent_policy-0.0.0-py3-none-any.whl"
+    sdist = tmp_path / "dist" / "yui_agent_policy-0.0.0.tar.gz"
     runtime_lock = tmp_path / "requirements" / "runtime-contract.txt"
+    verified_sdists: list[tuple[Path, str]] = []
 
     def fake_run(command: list[str], *, cwd: Path) -> None:
         commands.append((command, cwd))
@@ -213,6 +225,12 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
     monkeypatch.setattr(check_wheel_contract.venv, "EnvBuilder", EnvBuilder)
     monkeypatch.setattr(check_wheel_contract, "project_version", lambda: "0.0.0")
     monkeypatch.setattr(check_wheel_contract, "find_wheel", lambda _version: wheel)
+    monkeypatch.setattr(check_wheel_contract, "find_sdist", lambda _version: sdist)
+    monkeypatch.setattr(
+        check_wheel_contract,
+        "verify_sdist_examples",
+        lambda path, version: verified_sdists.append((path, version)),
+    )
     monkeypatch.setattr(check_wheel_contract, "RUNTIME_LOCK", runtime_lock)
     monkeypatch.setattr(
         check_wheel_contract,
@@ -222,6 +240,7 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
     monkeypatch.setattr(check_wheel_contract, "run", fake_run)
 
     assert check_wheel_contract.main() == 0
+    assert verified_sdists == [(sdist, "0.0.0")]
 
     python = tmp_path / "venv" / "bin" / "python"
     assert len(commands) == 4
@@ -248,6 +267,81 @@ def test_wheel_contract_installs_runtime_lock_before_local_wheel_without_deps(
     assert commands[2][0] == [str(python), "-m", "pip", "check"]
     assert commands[3][0][:3] == [str(python), "-I", "-c"]
     assert all(cwd == tmp_path for _command, cwd in commands)
+
+
+def test_distribution_contract_verifies_sdist_examples(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    version = "0.0.0"
+    source_root = tmp_path / "source"
+    sdist = tmp_path / f"yui_agent_policy-{version}.tar.gz"
+    payloads: dict[str, bytes] = {}
+    for relative, executable in check_wheel_contract.EXPECTED_SDIST_EXAMPLES.items():
+        source = source_root / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        payload = f"public example: {relative}\n".encode()
+        source.write_bytes(payload)
+        source.chmod(0o755 if executable else 0o644)
+        payloads[relative] = payload
+
+    with tarfile.open(sdist, mode="w:gz") as archive:
+        for relative, payload in payloads.items():
+            member = tarfile.TarInfo(f"yui_agent_policy-{version}/{relative}")
+            member.size = len(payload)
+            member.mode = (
+                0o755
+                if check_wheel_contract.EXPECTED_SDIST_EXAMPLES[relative]
+                else 0o644
+            )
+            archive.addfile(member, io.BytesIO(payload))
+
+    monkeypatch.setattr(check_wheel_contract, "ROOT", source_root)
+    check_wheel_contract.verify_sdist_examples(sdist, version)
+
+
+@pytest.mark.parametrize("mutation", ("missing", "content", "mode", "duplicate"))
+@pytest.mark.parametrize(
+    "mutation_target", ("examples/capability_map.py", "examples/check.py")
+)
+def test_distribution_contract_rejects_invalid_sdist_examples(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+    mutation_target: str,
+) -> None:
+    version = "0.0.0"
+    source_root = tmp_path / "source"
+    sdist = tmp_path / f"yui_agent_policy-{version}.tar.gz"
+    entries: list[tuple[str, bytes, int]] = []
+    for relative, executable in check_wheel_contract.EXPECTED_SDIST_EXAMPLES.items():
+        source = source_root / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        payload = f"public example: {relative}\n".encode()
+        source.write_bytes(payload)
+        if mutation == "missing" and relative == mutation_target:
+            continue
+        archived = (
+            b"changed\n"
+            if mutation == "content" and relative == mutation_target
+            else payload
+        )
+        mode = 0o755 if executable else 0o644
+        if mutation == "mode" and relative == mutation_target:
+            mode = 0o755 if mode == 0o644 else 0o644
+        entries.append((relative, archived, mode))
+        if mutation == "duplicate" and relative == mutation_target:
+            entries.append((relative, b"duplicate\n", mode))
+
+    with tarfile.open(sdist, mode="w:gz") as archive:
+        for relative, payload, mode in entries:
+            member = tarfile.TarInfo(f"yui_agent_policy-{version}/{relative}")
+            member.size = len(payload)
+            member.mode = mode
+            archive.addfile(member, io.BytesIO(payload))
+
+    monkeypatch.setattr(check_wheel_contract, "ROOT", source_root)
+    with pytest.raises(RuntimeError, match="sdist"):
+        check_wheel_contract.verify_sdist_examples(sdist, version)
 
 
 @pytest.mark.parametrize("mutation", ("content", "set"))

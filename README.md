@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.13` alpha. The core evaluator API is stable for v0.1;
-additive wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.14.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.13`. The core evaluator API is stable for v0.1; additive
+wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.13` for installation and provenance verification.
@@ -365,11 +366,12 @@ with `pip install -e .`; public users who need the released library should use
   command into `push.force` / `merge.pr` / `shell` / `unknown`. The hook
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
-  produce a false `push.force` classification. Active unquoted brace or
-  pathname expansion, selected visible dynamic argv execution, and Git subcommands
-  outside the bounded builtin allowlist become `unknown` and are rejected
-  before policy evaluation. See the file header for the exact bounded flow:
-  heredoc stripping, expansion screening, `shlex` tokenization, statement
+  produce a false `push.force` classification. Active arithmetic, active
+  unquoted brace or pathname expansion, shell startup selectors and state,
+  selected visible dynamic argv execution, and Git subcommands outside the
+  bounded builtin allowlist become `unknown` and are rejected before policy
+  evaluation. See the file header for the exact bounded flow: heredoc
+  stripping, expansion screening, `shlex` tokenization, statement
   classification, and recursive `bash -c` / `eval` handling.
 
 ### Codex CLI hooks — current contract notes
@@ -399,11 +401,28 @@ shell commands.
   statements, a bounded set of Git global options such as `--git-dir=/path`,
   a deliberate Git builtin allowlist (`status`, `add`, `commit`, `diff`,
   `fetch`, `push`, and `send-pack`), and the common `bash -c '...'` /
-  `eval` wrappers. Active unquoted brace or pathname expansion, selected visible
-  `xargs` and `find -exec`-style argv generation, and Git subcommands
-  outside that allowlist (including `config` alias mutation) map to
-  `unknown`. Leading `GIT_CONFIG*` assignments also map to `unknown` because
-  they can change push defaults or aliases before visible argv is evaluated.
+  `eval` wrappers. Active arithmetic is not interpreted, including `$((...))`,
+  `((...))`, legacy `$[...]`, `let`, array/integer/nameref declarations,
+  arithmetic parameter offsets, indexed-array or indirect parameter
+  expansions, and variable-target
+  builtins such as `printf -v`; these map to `unknown` because Bash may
+  evaluate variable values and array subscripts recursively. Expanding
+  heredocs are checked after active backslash-newline folding. Active unquoted
+  brace or pathname expansion, selected visible `xargs` and `find -exec`-style argv generation,
+  and Git subcommands outside that allowlist (including
+  `config` alias mutation) also map to `unknown`. Leading `GIT_CONFIG*`
+  assignments and shell startup-file selectors such as `BASH_ENV`, imported
+  shell state through `SHELLOPTS`, allexport wrapper options, `wait -p`
+  assignment, and trap mutation map to
+  `unknown` because they can change execution before visible argv is
+  evaluated. Interactive/login shell modes and explicit `--rcfile` /
+  `--init-file` inputs are also rejected because they execute startup files
+  before the inspected body. A modeled shell wrapper is accepted only when
+  `-c` has exactly one inspected command body; trailing arguments or
+  redirections are not modeled and therefore fail closed.
+  Parameter-expanded builtin options fail closed, and expanding-heredoc
+  delimiters are matched after backslash-newline folding so following commands
+  cannot be mistaken for heredoc data.
   A standalone `-exec`, `-execdir`, `-ok`, or `-okdir` token in
   `find` argv is conservatively blocked even when it could be another
   primary's value; the example does not model full `find` expression arity.

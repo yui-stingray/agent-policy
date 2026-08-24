@@ -139,7 +139,7 @@ jobs:
         run: python -m build --no-isolation
       - name: Verify metadata (twine check)
         run: python -m twine check dist/*
-      - name: Verify wheel public contract
+      - name: Verify distribution public contract
         run: python scripts/check_wheel_contract.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:

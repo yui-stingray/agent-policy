@@ -67,6 +67,40 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
     "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push "
     "GIT_CONFIG_VALUE_0=+HEAD:refs/heads/main git push origin",
+    "A='x[$(git push --force origin main)]'; : $((A))",
+    "A='x[$(git push --force origin main)]'; ((A))",
+    "A='x[$(git push --force origin main)]'; : $[A]",
+    "A='x[$(git push --force origin main)]'; let A",
+    "A='x[$(git push --force origin main)]'; declare -i A",
+    "A='x[$(git push --force origin main)0]'; "
+    "declare -a x='([A]=value)'",
+    "A='x[$(git push --force origin main)0]'; printf -v 'x[A]' '%s' ok",
+    "A='x[$(git push --force origin main)0]'; opt=v; "
+    "printf -$opt 'x[A]' '%s' ok",
+    "A='x[$(git push --force origin main)0]'; opt=v; "
+    "builtin printf -$opt 'x[A]' '%s' ok",
+    "A='x[$(git push --force origin main)0]'; value=abc; : ${value:A}",
+    "A='x[$(git push --force origin main)0]'; echo \"${missing:-$((A))}\"",
+    "A='x[$(git push --force origin main)0]'; "
+    "echo \"${missing:-'$((A))'}\"",
+    "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
+    "$\\\n((A))\nEOF",
+    "A='x[$(git push --force origin main)0]'; true & wait -n -p 'x[A]'",
+    "bash -ac 'sleep .05 & p=$!; printf SAFE >\"$p\"; "
+    "wait -n -p BASH_ENV; bash -c :'",
+    "printf 'git push --force origin main\\n' | "
+    'bash -c "trap \'export BASH_ENV=/dev/stdin\' DEBUG; bash -c \'echo SAFE\'"',
+    "BASH_ENV=/dev/stdin bash -c 'echo SAFE' "
+    "<<< 'git push --force origin main'",
+    "BASH_ENV=reviewed-startup.sh bash -c 'echo SAFE'",
+    "env BASH_ENV=/dev/stdin bash -c 'echo SAFE' "
+    "<<< 'git push --force origin main'",
+    "set -a; printf -v BASH_ENV /dev/stdin; "
+    "printf 'echo STARTUP\n' | bash -c 'echo SAFE'",
+    "read BASH_ENV <<< /dev/stdin; bash -c 'echo SAFE'",
+    "HOME=/tmp/agent-policy-startup bash -lc 'echo SAFE'",
+    "bash --rcfile /dev/stdin -ic 'echo SAFE'",
+    "cat <<EOF\nEO\\\nF\ngit push --force origin main\nEOF",
 )
 BASH_LINE_CONTINUATION = "\\" + "\n"
 BACKSLASH_CRLF = "\\" + "\r\n"
