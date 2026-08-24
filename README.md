@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.12` alpha. The core evaluator API is stable for v0.1;
-additive wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.13.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.12`. The core evaluator API is stable for v0.1; additive
+wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.12` for installation and provenance verification.
@@ -365,10 +366,12 @@ with `pip install -e .`; public users who need the released library should use
   command into `push.force` / `merge.pr` / `shell` / `unknown`. The hook
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
-  produce a false `push.force` classification; ambiguous syntax becomes
-  `unknown` and is rejected before policy evaluation. See the file header
-  for the exact algorithm (heredoc stripping → `shlex` tokenization →
-  scan-anywhere → recursive `bash -c` / `eval`).
+  produce a false `push.force` classification. Active unquoted brace or
+  pathname expansion, selected visible dynamic argv execution, and Git subcommands
+  outside the bounded builtin allowlist become `unknown` and are rejected
+  before policy evaluation. See the file header for the exact bounded flow:
+  heredoc stripping, expansion screening, `shlex` tokenization, statement
+  classification, and recursive `bash -c` / `eval` handling.
 
 ### Codex CLI hooks — current contract notes
 
@@ -395,9 +398,24 @@ shell commands.
 - **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
   not a full shell. It handles quoted literals, heredocs, compound
   statements, a bounded set of Git global options such as `--git-dir=/path`,
-  and the common `bash -c '...'` / `eval` wrappers. Forms such as
-  `git -c alias.p=push p --force`, process substitution, or function
-  definitions are not modeled. Clear commands
+  a deliberate Git builtin allowlist (`status`, `add`, `commit`, `diff`,
+  `fetch`, `push`, and `send-pack`), and the common `bash -c '...'` /
+  `eval` wrappers. Active unquoted brace or pathname expansion, selected visible
+  `xargs` and `find -exec`-style argv generation, and Git subcommands
+  outside that allowlist (including `config` alias mutation) map to
+  `unknown`. Leading `GIT_CONFIG*` assignments also map to `unknown` because
+  they can change push defaults or aliases before visible argv is evaluated.
+  A standalone `-exec`, `-execdir`, `-ok`, or `-okdir` token in
+  `find` argv is conservatively blocked even when it could be another
+  primary's value; the example does not model full `find` expression arity.
+  Unresolved parameter expansion anywhere in `find` argv is rejected for the
+  same reason. A literal Git, `gh`, direct Git helper, or shell interpreter
+  token behind an otherwise unmodeled command prefix is also conservatively
+  blocked rather than treated as inert argument text.
+  Leading redirection, known execution prefixes such as `exec`, `time`, and
+  `nohup`, grouping, and shell compound keywords also map to `unknown`.
+  Forms such as `git -c alias.p=push p --force`, process substitution, or
+  function definitions are not modeled. Clear commands
   outside the narrow patterns map to `shell`, while ambiguous, unbalanced,
   or unterminated parsing maps to `unknown` and is rejected by the hooks.
 

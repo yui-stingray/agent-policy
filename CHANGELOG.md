@@ -7,6 +7,15 @@ package is still alpha.
 
 ## Unreleased
 
+- Made the example capability mapper fail closed on active unquoted Bash
+  pathname expansion, selected visible dynamic argv execution, Git alias mutation, and
+  configuration-changing `GIT_CONFIG*` environment assignments, unrecognized
+  Git subcommands, and unmodeled command-dispatch prefixes before a shell
+  auto-allow policy can apply.
+- Began the next development cycle as 0.1.13.dev0, distinct from the latest
+  public PyPI release 0.1.12, so unreleased artifacts cannot reuse its
+  immutable published identity.
+
 ## 0.1.12 - 2026-08-23
 
 - Made the example capability mapper fail closed on active unquoted Bash brace

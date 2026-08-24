@@ -19,9 +19,10 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             is not scanned as commands while ``echo '<<EOF'`` remains
             literal data.
          2. Normalizing active Bash backslash-newline continuations for
-            brace/comment analysis, then returning ``unknown`` for active
-            unquoted brace expansion before tokenization because ``shlex``
-            cannot model forms such as ``--{force,force}``.
+            brace, pathname-expansion, and comment analysis, then returning
+            ``unknown`` for active unquoted brace expansion or pathname
+            expansion before tokenization because ``shlex`` cannot model
+            forms such as ``--{force,force}`` or ``--fo*``.
          3. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
             operators like ``;``, ``&&``, ``||``, ``|``, ``&`` become
             their own tokens and quoted arguments collapse into single
@@ -35,16 +36,20 @@ Why: Earlier versions of the bash hooks used raw substring matching on
                 gh pr merge ...                         → merge.pr
                 anything else                           → shell
 
-         6. Recursively classifying the embedded command when the
+         6. Returning ``unknown`` for visible dynamic argv execution
+            forms (currently ``xargs`` and ``find -exec``-style
+            predicates) instead of guessing about generated arguments.
+
+         7. Recursively classifying the embedded command when the
             statement is ``bash -c '...'`` / ``sh -c '...'`` / ``eval
             '...'``, so dropping into a nested shell does not hide a
             ``push.force`` from the hook.
 
-         7. Returning ``unknown`` for malformed, ambiguous, incomplete, or
+         8. Returning ``unknown`` for malformed, ambiguous, incomplete, or
             unmodeled execution syntax. Hooks must reject ``unknown`` rather
             than passing it to policy fallback.
 
-         8. Returning ``unknown`` for active command substitution. The
+         9. Returning ``unknown`` for active command substitution. The
             bounded parser does not attempt to interpret embedded backtick
             or ``$()`` commands; single-quoted and escaped forms remain
             literal data.
@@ -56,16 +61,18 @@ is given, which is convenient for piping from ``jq``.
 
 Scope: this is deliberately narrow. Full shell semantics (background jobs,
 function definitions) are not modeled. Active command and process
-substitution are rejected as ``unknown`` rather than parsed. Clear commands
-outside the narrow patterns fall back to ``shell``. Syntax the helper cannot
-parse confidently returns ``unknown`` so a wrapper can fail closed before
-policy evaluation.
+substitution, visible dynamic argv execution, and Git subcommands outside a
+small builtin allowlist are rejected as ``unknown`` rather than parsed.
+Clear commands outside the narrow patterns fall back to ``shell``. Syntax
+the helper cannot parse confidently returns ``unknown`` so a wrapper can
+fail closed before policy evaluation.
 
-Active unquoted brace expansion is also rejected before ``shlex`` because it
-can create arguments that are not visible in the raw token stream. The brace
-scan uses Bash logical lines after exact backslash-LF continuations are
-removed. Quoted or escaped braces, parameter expansion, ordinary shell
-grouping, and stripped heredoc bodies do not trigger this fallback.
+Active unquoted brace and pathname expansion are rejected before ``shlex``
+because they can create arguments that are not visible in the raw token
+stream. The scanners use Bash logical lines after exact backslash-LF
+continuations are removed. Quoted or escaped expansion syntax, comments,
+parameter expansion, ordinary shell grouping, and stripped heredoc bodies do
+not trigger this fallback.
 
 This module is stdlib-only so it does not depend on ``agent_policy``
 and can be exercised by unit tests without the package install.
@@ -80,7 +87,7 @@ import sys
 # Shell operators at which a new command statement starts. shlex with
 # punctuation_chars=True emits these as their own tokens when they
 # appear unquoted.
-_SEPARATORS = frozenset({";", ";;", "&", "&&", "|", "||"})
+_SEPARATORS = frozenset({";", ";;", "&", "&&", "|", "|&", "||"})
 
 # Bash's lexical blanks and line separator. Python's str.isspace() also
 # includes characters such as CR that remain ordinary shell word content.
@@ -135,6 +142,62 @@ _GIT_GLOBAL_OPTIONS_WITH_ATTACHED_VALUE = tuple(
 )
 _GIT_SUBCOMMAND_UNKNOWN = -1
 
+# Git aliases and external helpers can make a subcommand's effects differ from
+# its visible spelling. Only these builtin subcommands are classified as
+# ordinary shell or push.force; every other spelling fails closed.
+_GIT_BUILTIN_SUBCOMMANDS = frozenset(
+    {"add", "commit", "diff", "fetch", "push", "send-pack", "status"}
+)
+
+# These forms can synthesize argv after the helper has tokenized the command.
+# Keep the list deliberately small and reject rather than emulate their input
+# parsing or generated argument handling.
+_DYNAMIC_ARGV_EXECUTORS = frozenset({"xargs"})
+_FIND_DYNAMIC_EXECUTION_PREDICATES = frozenset(
+    {"-exec", "-execdir", "-ok", "-okdir"}
+)
+
+# These command-position forms can dispatch another executable or introduce
+# compound shell grammar that this bounded parser does not model. Blocking the
+# entire statement is safer than treating their later argv as inert data.
+_UNMODELED_EXECUTION_PREFIXES = frozenset(
+    {
+        "!",
+        ".",
+        "(",
+        ")",
+        "{",
+        "}",
+        "case",
+        "chroot",
+        "coproc",
+        "do",
+        "doas",
+        "done",
+        "elif",
+        "else",
+        "esac",
+        "exec",
+        "fi",
+        "for",
+        "function",
+        "if",
+        "nice",
+        "nohup",
+        "runuser",
+        "select",
+        "setsid",
+        "source",
+        "stdbuf",
+        "su",
+        "then",
+        "time",
+        "timeout",
+        "until",
+        "while",
+    }
+)
+
 # Bash short options that do not consume another argv element. Keeping this
 # bounded lets us recognize ``bash -lc <command>`` without guessing about
 # unknown option syntax.
@@ -172,10 +235,13 @@ def map_command(command: str, _depth: int = 0) -> str:
 
     try:
         stripped = _strip_heredocs(command)
-        brace_source = _normalize_active_line_continuations(stripped)
-        if _contains_active_unquoted_brace_expansion(brace_source):
+        active_source = _normalize_active_line_continuations(stripped)
+        if _contains_active_unquoted_brace_expansion(active_source):
             return "unknown"
-        tokens = _tokenize(_separate_unquoted_newlines(stripped))
+        if _contains_active_unquoted_pathname_expansion(active_source):
+            return "unknown"
+        token_source = _mask_arithmetic_expansions_for_tokenization(active_source)
+        tokens = _tokenize(_separate_unquoted_newlines(token_source))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
         # unterminated heredoc makes the bounded parser uncertain. A hook
@@ -238,6 +304,51 @@ def _separate_unquoted_newlines(command: str) -> str:
     return "".join(out)
 
 
+def _mask_arithmetic_expansions_for_tokenization(command: str) -> str:
+    """Keep ``$((...))`` inside one shell word when shlex tokenizes it."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            out.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            out.append(command[index : index + 2])
+            index += 2
+            continue
+        if char == "#" and quote is None and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                out.append(command[index:])
+                break
+            out.append(command[index:newline])
+            index = newline
+            continue
+        if char == "'" and quote is None:
+            out.append(char)
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            out.append(char)
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$((", index):
+            end = _skip_arithmetic_expression(command, index + 3)
+            out.append("__AGENT_POLICY_ARITHMETIC__")
+            index = end
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def _normalize_active_line_continuations(command: str) -> str:
     """Remove Bash line continuations for brace and comment analysis.
 
@@ -249,8 +360,8 @@ def _normalize_active_line_continuations(command: str) -> str:
     do not affect later logical lines.
 
     Heredoc bodies have already been stripped before this helper runs. The
-    normalized view is used only by the brace scanner; substitution detection
-    and shlex tokenization retain their existing input and behavior.
+    normalized view is used by the expansion scanners and shlex tokenization
+    so all three share Bash's logical-line comment boundaries.
     """
     out: list[str] = []
     quote: str | None = None
@@ -359,6 +470,216 @@ def _contains_active_unquoted_brace_expansion(command: str) -> bool:
             return True
         index += 1
     return False
+
+
+def _contains_active_unquoted_pathname_expansion(command: str) -> bool:
+    """Whether command contains unquoted pathname-expansion syntax.
+
+    This bounded scan rejects unquoted *, ?, complete bracket expressions, and
+    Bash extended-glob operators before shlex erases the distinction between a
+    literal token and an argv pattern. It deliberately skips quotes, escapes,
+    comments, heredoc bodies, parameter expansion, and arithmetic expressions.
+    """
+    quote: str | None = None
+    index = 0
+    word_start: int | None = None
+    command_seen = False
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            if word_start is None:
+                word_start = index
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            if word_start is None:
+                word_start = index
+            quote = char
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                return False
+            word_start = None
+            command_seen = False
+            index = newline + 1
+            continue
+        if char in _BASH_LEXICAL_WHITESPACE:
+            if word_start is not None:
+                command_seen = command_seen or not _is_env_assignment(
+                    command[word_start:index]
+                )
+                word_start = None
+            if char == "\n":
+                command_seen = False
+            index += 1
+            continue
+        if char in ";|&()":
+            word_start = None
+            command_seen = False
+            index += 1
+            continue
+        if word_start is None:
+            word_start = index
+        if command.startswith("${", index):
+            index = _skip_parameter_expansion(command, index)
+            continue
+        if command.startswith("$((", index):
+            index = _skip_arithmetic_expression(command, index + 3)
+            continue
+        if command.startswith("$[", index):
+            index = _skip_legacy_arithmetic_expression(command, index + 2)
+            continue
+        if command.startswith("((", index):
+            index = _skip_arithmetic_expression(command, index + 2)
+            continue
+        if char in {"*", "?"}:
+            if command_seen or not _is_env_assignment(command[word_start:index]):
+                return True
+            index += 1
+            continue
+        if char in {"@", "+", "!"} and command.startswith("(", index + 1):
+            # With extglob enabled, these operators can synthesize argv just
+            # like ``*(`` and ``?(``, which are covered by the branch above.
+            if command_seen or not _is_env_assignment(command[word_start:index]):
+                return True
+            index += 1
+            continue
+        if char == "[" and _pathname_bracket_expression_end(command, index):
+            if command_seen or not _is_env_assignment(command[word_start:index]):
+                return True
+        index += 1
+    return False
+
+
+def _skip_arithmetic_expression(command: str, index: int) -> int:
+    """Return the offset after a bounded arithmetic expression, if present."""
+    group_depth = 0
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "(":
+            group_depth += 1
+            index += 1
+            continue
+        if char == ")":
+            if group_depth:
+                group_depth -= 1
+                index += 1
+                continue
+            if command.startswith("))", index):
+                return index + 2
+            return len(command)
+        index += 1
+    return len(command)
+
+
+def _skip_legacy_arithmetic_expression(command: str, index: int) -> int:
+    """Return the offset after a bounded legacy ``$[...]`` expression."""
+    depth = 1
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(command)
+
+
+def _pathname_bracket_expression_end(command: str, opening: int) -> int | None:
+    """Return the end of one complete, unquoted pathname bracket expression."""
+    index = opening + 1
+    if index >= len(command):
+        return None
+    if command[index] in {"!", "^"}:
+        index += 1
+
+    has_member = False
+    if index < len(command) and command[index] == "]":
+        has_member = True
+        index += 1
+
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            if index + 1 >= len(command):
+                return None
+            has_member = True
+            index += 2
+            continue
+        if char in _BASH_LEXICAL_WHITESPACE or char in ";|&()<>":
+            return None
+        if char == "[" and index + 1 < len(command) and command[index + 1] in ".=:":
+            terminator = command[index + 1] + "]"
+            end = command.find(terminator, index + 2)
+            if end < 0 or end == index + 2:
+                return None
+            has_member = True
+            index = end + 2
+            continue
+        if char == "]":
+            return index + 1 if has_member else None
+        has_member = True
+        index += 1
+    return None
 
 
 def _skip_parameter_expansion(command: str, start: int) -> int:
@@ -839,10 +1160,34 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     # Skip leading env assignments: ``FOO=bar git push --force``.
     i = 0
     while i < len(tokens) and _is_env_assignment(tokens[i]):
+        if _is_git_config_assignment(tokens[i]):
+            # Git reads GIT_CONFIG* assignments before it resolves push
+            # defaults and aliases. Their effects are outside this static argv
+            # model and may hide a force refspec from the visible command.
+            return "unknown"
         i += 1
     tokens = tokens[i:]
     if not tokens:
         return "shell"
+
+    # Unwrap the one common command prefix this example models. Unknown sudo
+    # option forms fail closed because they can consume following arguments.
+    while os.path.basename(tokens[0]) == "sudo":
+        sudo_args = tokens[1:]
+        if sudo_args and sudo_args[0] == "--":
+            sudo_args = sudo_args[1:]
+        elif not sudo_args or sudo_args[0].startswith("-"):
+            return "unknown"
+        tokens = sudo_args
+        if not tokens:
+            return "unknown"
+        if _is_env_assignment(tokens[0]):
+            # sudo accepts VAR=value before its command. Re-tokenizing that
+            # mini-language is outside this bounded model.
+            return "unknown"
+
+    if _starts_with_redirection(tokens):
+        return "unknown"
 
     # Recurse into shell wrappers and eval. These patterns embed a
     # command in a string argument, so the old substring matcher
@@ -879,37 +1224,88 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
             if nested != "shell":
                 return nested
 
-    # Scan the statement for the two narrow patterns the hooks care
-    # about. We scan anywhere in the token stream so wrappers like
-    # ``sudo git push --force`` or ``xargs -n1 git push --force`` are
-    # still caught — the old substring behavior matched these true
-    # positives and we preserve that coverage.
-    for i, tok in enumerate(tokens):
-        basename = os.path.basename(tok)
-        if i > 0 and basename in _SHELL_WRAPPERS:
-            return _classify_wrapper_c(tokens[i + 1 :], depth)
-        if basename == "git":
-            subcommand_index = _git_subcommand_index(tokens, i)
-            if subcommand_index == _GIT_SUBCOMMAND_UNKNOWN:
-                return "unknown"
-            if (
-                subcommand_index is not None
-                and tokens[subcommand_index] in {"push", "send-pack"}
-            ):
-                push_args = tokens[subcommand_index + 1 :]
-                if _has_force_flag(push_args):
-                    return "push.force"
-                if any("$" in arg for arg in push_args):
-                    return "unknown"
-        if basename == "git-send-pack":
-            send_pack_args = tokens[i + 1 :]
-            if _has_force_flag(send_pack_args):
+    # Classify only the executable position. Treating arbitrary argument text
+    # as a nested executor creates false positives such as ``echo xargs``.
+    basename = os.path.basename(tokens[0])
+    if basename in _UNMODELED_EXECUTION_PREFIXES:
+        return "unknown"
+    if basename in _DYNAMIC_ARGV_EXECUTORS:
+        return "unknown"
+    if basename == "find":
+        if any(
+            arg in _FIND_DYNAMIC_EXECUTION_PREDICATES for arg in tokens[1:]
+        ) or any("$" in arg for arg in tokens[1:]):
+            return "unknown"
+    if basename == "git":
+        subcommand_index = _git_subcommand_index(tokens, 0)
+        if (
+            subcommand_index is None
+            or subcommand_index == _GIT_SUBCOMMAND_UNKNOWN
+        ):
+            return "unknown"
+        subcommand = tokens[subcommand_index]
+        if subcommand not in _GIT_BUILTIN_SUBCOMMANDS:
+            return "unknown"
+        if subcommand in {"push", "send-pack"}:
+            push_args = tokens[subcommand_index + 1 :]
+            if _has_force_flag(push_args):
                 return "push.force"
-            if any("$" in arg for arg in send_pack_args):
+            if any("$" in arg for arg in push_args):
                 return "unknown"
-        if basename == "gh" and tokens[i + 1 : i + 3] == ["pr", "merge"]:
+        return "shell"
+    if basename in {"git-push", "git-send-pack"}:
+        push_args = tokens[1:]
+        if _has_force_flag(push_args):
+            return "push.force"
+        if any("$" in arg for arg in push_args):
+            return "unknown"
+        return "shell"
+    elif basename.startswith("git-"):
+        # Any other direct helper may be an external program or alias-like
+        # dispatcher with effects that differ from its visible spelling.
+        return "unknown"
+    if basename == "gh":
+        if tokens[1:3] == ["pr", "merge"]:
             return "merge.pr"
+        return "shell"
+    if _contains_later_sensitive_command_token(tokens):
+        # Preserve the old scan-anywhere guard conservatively without treating
+        # ordinary xargs/find argument text as an executor. A literal Git, gh,
+        # or shell executable behind an unmodeled prefix must not auto-allow.
+        return "unknown"
     return "shell"
+
+
+def _starts_with_redirection(tokens: list[str]) -> bool:
+    """Whether a statement begins with an unmodeled shell redirection."""
+    first = tokens[0]
+    if first.startswith(("<", ">", "&>")):
+        return True
+    if (
+        first.startswith("{")
+        and first.endswith("}")
+        and len(tokens) > 1
+        and tokens[1].startswith(("<", ">"))
+    ):
+        return True
+    return (
+        first.isdecimal()
+        and len(tokens) > 1
+        and tokens[1].startswith(("<", ">"))
+    )
+
+
+def _contains_later_sensitive_command_token(tokens: list[str]) -> bool:
+    """Whether argv visibly contains a sensitive executable after its head."""
+    for token in tokens[1:]:
+        basename = os.path.basename(token)
+        if (
+            basename in {"git", "gh", "git-push", "git-send-pack"}
+            or basename.startswith("git-")
+            or basename in _SHELL_WRAPPERS
+        ):
+            return True
+    return False
 
 
 def _classify_wrapper_c(args: list[str], depth: int) -> str:
@@ -980,7 +1376,12 @@ def _env_command_start(args: list[str]) -> int | None:
         arg = args[index]
         if arg == "--":
             return index + 1
-        if _is_env_assignment(arg) or arg in {"-0", "-i", "--ignore-environment", "--null"}:
+        if _is_env_assignment(arg):
+            if _is_git_config_assignment(arg):
+                return None
+            index += 1
+            continue
+        if arg in {"-0", "-i", "--ignore-environment", "--null"}:
             index += 1
             continue
         if arg in {"-C", "-u", "--chdir", "--unset"}:
@@ -1069,6 +1470,12 @@ def _is_env_assignment(token: str) -> bool:
     if not head or head[0].isdigit():
         return False
     return all(c.isalnum() or c == "_" for c in head)
+
+
+def _is_git_config_assignment(token: str) -> bool:
+    """Whether a leading assignment can mutate Git's effective config."""
+    name = token.split("=", 1)[0]
+    return name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_")
 
 
 def _stricter(a: str, b: str) -> str:
