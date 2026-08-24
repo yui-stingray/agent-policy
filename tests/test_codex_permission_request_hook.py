@@ -56,6 +56,38 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "git config alias.fp 'push --force'",
     "git-config alias.fp 'push --force'",
     "git fp origin main",
+    pytest.param(
+        "printf '\\tpush = +HEAD:refs/heads/main\\n' >> .git/config; "
+        "git push origin",
+        id="same-command-config-writer",
+    ),
+    pytest.param(
+        "printf '\\tpush = +HEAD:refs/heads/main\\n' | "
+        "tee -a .git/config; git push origin",
+        id="same-command-tee-writer",
+    ),
+    # Plain push text cannot prove that pre-existing refspec, mirror, hook,
+    # helper, or selected-repository state is inert.
+    pytest.param("git push origin", id="preconfigured-force-refspec"),
+    pytest.param("git push origin main", id="preconfigured-mirror"),
+    pytest.param("git push origin HEAD:main", id="pre-push-hook"),
+    "git -C reviewed-repo push origin",
+    "git --git-dir=reviewed-repo/.git "
+    "--work-tree=reviewed-repo push origin",
+    "env -C reviewed-repo git push origin",
+    "git-push origin main",
+    "git send-pack origin HEAD:main",
+    "git-send-pack origin HEAD:main",
+    "printf reviewed > reviewed-output",
+    "printf reviewed 2>> reviewed-errors",
+    "printf reviewed | tee reviewed-output",
+    "git push -o +ci.skip origin main",
+    "git push -o+ci.skip origin main",
+    "git push --push-option +ci.skip origin main",
+    "git push --push-option=+ci.skip origin main",
+    r"true $'a\''; git push --force origin main # \'",
+    r"true $'a\'' > reviewed-output \'",
+    "true $\\\n'a\\''; git push --force origin main # \\'",
     "> /dev/null git push --force origin main",
     "exec git push --force origin main",
     "time git push --force origin main",
@@ -398,10 +430,6 @@ def test_deny_returns_fixed_permission_json() -> None:
         "git status --short",
         'bash -c \'printf "%s\\n" "$HOME"\'',
         "builtin printf '%s\\n' ok",
-        "git push -o +ci.skip origin main",
-        "git push -o+ci.skip origin main",
-        "git push --push-option +ci.skip origin main",
-        "git push --push-option=+ci.skip origin main",
     ),
 )
 def test_auto_allow_returns_fixed_permission_json(

@@ -396,7 +396,6 @@ def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
         "git status && git push --force",
         "git push --force; ls",
         "git fetch || git push --force",
-        "git diff | tee /tmp/x && git push --force",
         # Recursive: bash -c '...' / sh -c '...' / eval.
         "bash -c 'git push --force origin main'",
         'sh -c "git push --force origin main"',
@@ -560,6 +559,7 @@ def test_home_assignment_outside_zsh_still_fails_closed(command: str) -> None:
         ('runner=git; stdbuf -oL "$runner" push --force origin main', "unknown"),
         ("( git push --force origin main )", "unknown"),
         ("echo hi |& git push --force origin main", "push.force"),
+        ("git diff | tee /tmp/x && git push --force", "unknown"),
         ("&>/dev/null git push --force origin main", "unknown"),
         ("{fd}>/dev/null git push --force origin main", "unknown"),
         ("sudo FOO=bar git push --force origin main", "unknown"),
@@ -595,8 +595,10 @@ def test_force_push_execution_forms_do_not_fall_through_to_shell(
         "git push --push-option=+ci.skip origin main",
     ],
 )
-def test_push_option_values_are_not_force_refspecs(command: str) -> None:
-    assert map_command(command) == "shell"
+def test_push_option_values_are_not_force_refspecs_or_auto_allowed(
+    command: str,
+) -> None:
+    assert map_command(command) == "unknown"
 
 
 def test_command_dispatch_before_shell_wrapper_returns_unknown() -> None:
@@ -802,14 +804,87 @@ def test_unmodeled_execution_prefixes_return_unknown(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
+        pytest.param(
+            "printf '\\tpush = +HEAD:refs/heads/main\\n' >> .git/config; "
+            "git push origin",
+            id="same-command-config-writer",
+        ),
+        pytest.param(
+            "printf '\\tpush = +HEAD:refs/heads/main\\n' | "
+            "tee -a .git/config; git push origin",
+            id="same-command-tee-writer",
+        ),
+        pytest.param("git push origin", id="preconfigured-force-refspec"),
+        pytest.param("git push origin main", id="preconfigured-mirror"),
+        pytest.param("git push origin HEAD:main", id="pre-push-hook"),
+        "git push origin main --tags",
+        "git -C reviewed-repo push origin",
+        "git --git-dir=reviewed-repo/.git "
+        "--work-tree=reviewed-repo push origin",
+        "env -C reviewed-repo git push origin",
+        "git-push origin main",
+        "git send-pack origin HEAD:main",
+        "git-send-pack origin HEAD:main",
+    ],
+)
+def test_effective_git_push_state_returns_unknown(command: str) -> None:
+    # A command-only classifier cannot prove refspec, mirror, hook, helper,
+    # repository-selection, or TOCTOU state for a push operation.
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf reviewed > reviewed-output",
+        "printf reviewed 2>> reviewed-errors",
+        "printf reviewed &> reviewed-output",
+        "printf reviewed | tee reviewed-output",
+        "cat /dev/null > reviewed-output",
+        "true; printf reviewed >> reviewed-output",
+    ],
+)
+def test_active_output_redirection_and_file_writers_return_unknown(
+    command: str,
+) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"true $'a\''; git push --force origin main # \'",
+        r"true $'a\'' > reviewed-output \'",
+        "true $\\\n'a\\''; git push --force origin main # \\'",
+    ],
+)
+def test_ansi_c_quoting_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf '%s' '>'",
+        'printf \'%s\' ">"',
+        r"printf '%s' \>",
+        "printf '%s' reviewed # > ignored",
+        "cat <<'EOF'\n> literal\nEOF",
+    ],
+)
+def test_literal_output_redirection_characters_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "ls -la",
         "git status",
         "git add README.md",
         "git commit -m wip",
         "git diff --cached",
         "git fetch origin",
-        "git push origin main",
-        "git push origin main --tags",
         "git commit -m 'wip'",
     ],
 )
@@ -828,7 +903,6 @@ def test_plain_shell(command: str) -> None:
         "ls -la",
         "printf '%s' reviewed",
         "pwd",
-        "printf reviewed | tee /dev/null",
         "test 1 = 1",
         "true",
     ],

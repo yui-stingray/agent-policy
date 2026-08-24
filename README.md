@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.15` alpha. The core evaluator API is stable for v0.1;
-additive wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.16.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.15`. The core evaluator API is stable for v0.1; additive
+wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.15` for installation and provenance verification.
@@ -64,8 +65,9 @@ is not required setup.
 pip install yui-agent-policy==0.1.15
 ```
 
-From a source checkout, install the package in editable mode so both the
-library and `examples/check.py` can resolve `import agent_policy`:
+From this current unreleased source checkout, install the package in editable
+mode so both the library and `examples/check.py` can resolve
+`import agent_policy`:
 
 ```bash
 pip install -e .
@@ -403,7 +405,11 @@ shell commands.
   options such as `--git-dir=/path`, and deliberate Git builtin and
   subcommand-option allowlists (`status`, `add`, `commit`, `diff`,
   `fetch`, `push`, and `send-pack`), and the common `bash -c '...'` /
-  `eval` wrappers. Active arithmetic is not interpreted, including `$((...))`,
+  `eval` wrappers. Every `push` or `send-pack` without an explicit visible
+  force option maps to `unknown`: command text cannot prove effective Git
+  refspec, mirror, hook, helper, repository-selection, or TOCTOU state.
+  Explicit visible force forms remain `push.force`.
+  Active arithmetic is not interpreted, including `$((...))`,
   `((...))`, legacy `$[...]`, `let`, array/integer/nameref declarations,
   arithmetic parameter offsets, indexed-array or indirect parameter
   expansions, and variable-target
@@ -425,6 +431,11 @@ shell commands.
   they can execute input before or around the inspected body. A modeled shell
   wrapper is accepted only when `-c` has exactly one inspected command body;
   trailing arguments or redirections are not modeled and therefore fail closed.
+  Active output redirection at any statement position also fails closed, as do
+  file-writing command heads such as `tee`, so one hook call cannot stage Git
+  configuration, hooks, helpers, or policy state for another call. ANSI-C
+  quoted words (`$'...'`) are not modeled and fail closed because their
+  escaped-quote rules differ from ordinary single quotes.
   Parameter-expanded builtin options fail closed, and expanding-heredoc
   delimiters are matched after backslash-newline folding so following commands
   cannot be mistaken for heredoc data.
@@ -435,8 +446,9 @@ shell commands.
   same reason. A literal Git, `gh`, direct Git helper, or shell interpreter
   token behind an otherwise unmodeled command prefix is also conservatively
   blocked rather than treated as inert argument text.
-  Leading redirection, known execution prefixes such as `exec`, `time`, and
-  `nohup`, grouping, and shell compound keywords also map to `unknown`.
+  Leading input redirection, active output redirection anywhere, known
+  execution prefixes such as `exec`, `time`, and `nohup`, grouping, and shell
+  compound keywords also map to `unknown`.
   Forms such as `git -c alias.p=push p --force`, process substitution, or
   function definitions are not modeled. Command heads outside the finite
   allowlist, including general interpreters and build/test runners, map to
@@ -446,6 +458,10 @@ shell commands.
   rejected the same way. The helper classifies command text only and does not
   inspect the internals of bare allowlisted executables or inherited process
   state.
+
+  Public `0.1.15` retains the earlier command-text-only push boundary. Until a
+  later patch is published, do not configure its example hooks to auto-allow
+  `shell` or the default mode for inputs that can reach Git push operations.
 
 ## Releases
 

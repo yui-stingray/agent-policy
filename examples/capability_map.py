@@ -21,10 +21,11 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             arithmetic expansion are rejected instead of elided, and their
             delimiter lines are matched after backslash-newline folding.
          2. Normalizing active Bash backslash-newline continuations for
-            brace, pathname-expansion, and comment analysis, then returning
-            ``unknown`` for active unquoted brace expansion or pathname
-            expansion before tokenization because ``shlex`` cannot model
-            forms such as ``--{force,force}`` or ``--fo*``.
+            output-redirection, brace, pathname-expansion, and comment
+            analysis, then returning ``unknown`` for active output
+            redirection, unquoted brace expansion, or pathname expansion
+            before tokenization because ``shlex`` cannot preserve enough
+            context to prove those forms inert.
          3. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
             operators like ``;``, ``&&``, ``||``, ``|``, ``&`` become
             their own tokens and quoted arguments collapse into single
@@ -35,8 +36,9 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             patterns the hooks care about:
 
                 git push ... --force[-with-lease] / -f  → push.force
+                non-explicit-force push / send-pack     → unknown
                 gh pr merge ...                         → merge.pr
-                bounded simple commands                 → shell
+                bounded read-only simple commands       → shell
                 every other command or state form       → unknown
 
          6. Returning ``unknown`` unless each simple-command head belongs to a
@@ -76,13 +78,15 @@ rather than parsed. Only explicitly modeled simple commands return ``shell``;
 syntax the helper cannot parse confidently returns ``unknown`` so a wrapper can
 fail closed before policy evaluation.
 
-Active unquoted brace and pathname expansion are rejected before ``shlex``
-because they can create arguments that are not visible in the raw token
-stream. The scanners use Bash logical lines after exact backslash-LF
-continuations are removed. Quoted or escaped expansion syntax, comments,
-simple parameter expansion, ordinary shell grouping, and quoted-delimiter
-heredoc bodies do not trigger this fallback. Arithmetic-bearing and indirect
-parameter expansions fail closed.
+Active output redirection and unquoted brace and pathname expansion are
+rejected before ``shlex`` because they can mutate repository state or create
+arguments that are not visible in the raw token stream. The scanners use Bash
+logical lines after exact backslash-LF continuations are removed. Quoted or
+escaped syntax, comments, simple parameter expansion, ordinary shell grouping,
+and quoted-delimiter heredoc bodies do not trigger this fallback.
+Arithmetic-bearing and indirect parameter expansions fail closed. ANSI-C
+quoted words also fail closed because their escaped-quote rules differ from the
+ordinary single-quote state used by this bounded parser.
 
 This module is stdlib-only so it does not depend on ``agent_policy``
 and can be exercised by unit tests without the package install.
@@ -214,8 +218,8 @@ _FIND_DYNAMIC_EXECUTION_PREDICATES = frozenset(
 )
 
 # Only these direct simple-command heads may use the policy-controlled ``shell``
-# capability. They do not provide a shell-level callback, interpreter, or state
-# mutation surface in the modeled forms. Git and shell wrappers are handled by
+# capability. They do not provide a shell-level callback, interpreter, or
+# modeled file-write surface. Git and shell wrappers are handled by
 # dedicated branches below. Everything else is unknown by default rather than
 # silently expanding the auto-allow surface when Bash adds a builtin or a caller
 # introduces another command dispatcher.
@@ -229,7 +233,6 @@ _MODELED_SIMPLE_COMMANDS = frozenset(
         "ls",
         "printf",
         "pwd",
-        "tee",
         "test",
         "true",
     }
@@ -318,6 +321,8 @@ def map_command(command: str, _depth: int = 0) -> str:
     try:
         stripped = _strip_heredocs(command)
         active_source = _normalize_active_line_continuations(stripped)
+        if _contains_active_output_redirection(active_source):
+            return "unknown"
         if _contains_active_arithmetic_expansion(active_source):
             return "unknown"
         if _contains_active_unquoted_brace_expansion(active_source):
@@ -533,6 +538,52 @@ def _contains_active_arithmetic_expansion(command: str) -> bool:
         if command.startswith("((", index) and (
             index == 0 or command[index - 1] != "$"
         ):
+            return True
+        index += 1
+    return False
+
+
+def _contains_active_output_redirection(command: str) -> bool:
+    """Whether an unquoted, unescaped output redirection is active.
+
+    ``shlex`` removes the distinction between a quoted literal ``>`` and a
+    redirection operator. Inspect the normalized source first so output
+    redirection at any statement position cannot stage Git configuration,
+    hooks, helpers, or policy state before a later auto-allowed command.
+    Heredoc bodies and active command/process substitutions were already
+    handled by :func:`_strip_heredocs`.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                return False
+            index = newline + 1
+            continue
+        if char == ">":
             return True
         index += 1
     return False
@@ -1029,6 +1080,8 @@ def _strip_heredocs(command: str) -> str:
                 raise _CommandParseError("unterminated escape")
             pos += 2
             continue
+        if char == "$" and _starts_ansi_c_quote(command, pos):
+            raise _CommandParseError("active ANSI-C quoting")
         if char in {"'", '"'}:
             quote = char
             pos += 1
@@ -1256,6 +1309,8 @@ def _contains_unquoted_heredoc_operator(
         if char == "\\":
             pos += 2
             continue
+        if char == "$" and _starts_ansi_c_quote(command, pos):
+            raise _CommandParseError("active ANSI-C quoting")
         if char in {"'", '"'}:
             quote = char
             pos += 1
@@ -1302,6 +1357,16 @@ def _starts_process_substitution(command: str, index: int) -> bool:
     resulting ``unknown`` classification.
     """
     return command.startswith("<(", index) or command.startswith(">(", index)
+
+
+def _starts_ansi_c_quote(command: str, index: int) -> bool:
+    """Whether ``$'`` starts here after active backslash-LF folding."""
+    if command[index] != "$":
+        return False
+    quote_index = index + 1
+    while command.startswith("\\\n", quote_index):
+        quote_index += 2
+    return quote_index < len(command) and command[quote_index] == "'"
 
 
 def _skip_line_continuations(command: str, index: int) -> int:
@@ -1525,8 +1590,10 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         if subcommand in {"push", "send-pack"}:
             if _has_force_flag(subcommand_args):
                 return "push.force"
-            if any("$" in arg for arg in subcommand_args):
-                return "unknown"
+            # Command text cannot prove the effective refspec, mirror mode,
+            # hooks, helpers, selected repository, or their TOCTOU stability.
+            # A trusted wrapper may model those inputs; this example does not.
+            return "unknown"
         return "shell"
     if basename in {"git-push", "git-send-pack"}:
         push_args = tokens[1:]
@@ -1535,9 +1602,7 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
             return "unknown"
         if _has_force_flag(push_args):
             return "push.force"
-        if any("$" in arg for arg in push_args):
-            return "unknown"
-        return "shell"
+        return "unknown"
     elif basename.startswith("git-"):
         # Any other direct helper may be an external program or alias-like
         # dispatcher with effects that differ from its visible spelling.
