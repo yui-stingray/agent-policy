@@ -7,14 +7,16 @@ package is still alpha.
 
 ## Unreleased
 
+## 0.1.14 - 2026-08-24
+
 - Made the example capability mapper fail closed on explicit and implicit Bash
   arithmetic evaluation, trap mutation, `wait -p` assignment, shell startup
   selectors/options/state, and shell-wrapper input following an inspected
   `-c` body so generated force-push commands cannot reach a `shell` or default
   `auto_allow` policy.
-- Began the next development cycle as 0.1.14.dev0, distinct from the latest
-  public PyPI release 0.1.13, so unreleased artifacts cannot reuse its
-  immutable published identity.
+- Kept unreleased builds on `0.1.14.dev0`, distinct from public `0.1.13`, so
+  development artifacts could not reuse a published identity before this final
+  `0.1.14` release.
 
 ## 0.1.13 - 2026-08-24
 
