@@ -77,9 +77,10 @@
 #   are classified per-statement and the strictest capability wins.
 # - No caching: every Bash call shells out to python3.
 
-# Bash processes its startup environment, including BASH_ENV, before this
-# file runs; that launcher boundary is trusted. This must be the first
-# executable statement so inherited xtrace cannot expose hook inputs.
+# Bash processes the hook process's inherited startup environment before this
+# file runs; that launcher boundary is trusted. Payload commands that assign
+# startup-file selectors are rejected by capability_map.py. This must be the
+# first executable statement so inherited xtrace cannot expose hook inputs.
 set +x
 set -Eeuo pipefail
 

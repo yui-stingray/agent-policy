@@ -1,12 +1,13 @@
 """Where: scripts/check_wheel_contract.py
-What: install the built wheel into an isolated venv and verify the public contract.
-Why: editable installs can hide packaging mistakes; releases must prove the wheel works.
+What: verify the built sdist examples and install the wheel in an isolated venv.
+Why: editable installs can hide packaging mistakes; releases must prove both artifacts.
 """
 
 from __future__ import annotations
 
 import hashlib
 import subprocess
+import tarfile
 import tempfile
 import textwrap
 import tomllib
@@ -31,6 +32,12 @@ EXPECTED_EXPORTS = {
     "Mode",
     "Reason",
 }
+EXPECTED_SDIST_EXAMPLES = {
+    "examples/capability_map.py": False,
+    "examples/claude_code_hook.sh": True,
+    "examples/codex_hook.sh": True,
+    "examples/codex_permission_request_hook.sh": True,
+}
 
 
 def project_version() -> str:
@@ -47,6 +54,36 @@ def find_wheel(version: str) -> Path:
             f"expected exactly one yui_agent_policy {version} wheel in {DIST}, got {len(wheels)}"
         )
     return wheels[0]
+
+
+def find_sdist(version: str) -> Path:
+    """Return the built sdist for the current project version."""
+    sdists = sorted(DIST.glob(f"yui_agent_policy-{version}.tar.gz"))
+    if len(sdists) != 1:
+        raise RuntimeError(
+            f"expected exactly one yui_agent_policy {version} sdist in dist, got {len(sdists)}"
+        )
+    return sdists[0]
+
+
+def verify_sdist_examples(sdist: Path, version: str) -> None:
+    """Require the public examples to match source bytes and hook modes."""
+    prefix = f"yui_agent_policy-{version}/"
+    with tarfile.open(sdist, mode="r:gz") as archive:
+        members = archive.getmembers()
+        for relative, executable in EXPECTED_SDIST_EXAMPLES.items():
+            archive_name = prefix + relative
+            matches = [member for member in members if member.name == archive_name]
+            if len(matches) != 1 or not matches[0].isfile():
+                raise RuntimeError(
+                    f"sdist must contain exactly one required example: {relative}"
+                )
+            member = matches[0]
+            extracted = archive.extractfile(member)
+            if extracted is None or extracted.read() != (ROOT / relative).read_bytes():
+                raise RuntimeError(f"sdist example differs from source: {relative}")
+            if bool(member.mode & 0o111) != executable:
+                raise RuntimeError(f"sdist example has unexpected executable mode: {relative}")
 
 
 def run(command: list[str], *, cwd: Path) -> None:
@@ -79,8 +116,10 @@ def main() -> int:
 
     version = project_version()
     wheel = find_wheel(version)
+    sdist = find_sdist(version)
     artifacts_before_smoke = dist_artifact_digests()
     try:
+        verify_sdist_examples(sdist, version)
         with tempfile.TemporaryDirectory(prefix="agent-policy-wheel-") as temp_dir:
             temp = Path(temp_dir)
             venv_dir = temp / "venv"
@@ -212,7 +251,7 @@ def main() -> int:
     finally:
         verify_dist_artifacts_unchanged(artifacts_before_smoke)
 
-    print(f"wheel contract OK: {wheel.name}")
+    print(f"distribution contract OK: {wheel.name}, {sdist.name}")
     return 0
 
 

@@ -189,7 +189,7 @@ def test_ci_and_release_builds_use_the_hashed_nonisolated_toolchain() -> None:
         ) < workflow_job.index("python -m build --no-isolation")
         assert workflow_job.index(build_step) < workflow_job.index(
             "Verify metadata (twine check)"
-        ) < workflow_job.index("Verify wheel public contract")
+        ) < workflow_job.index("Verify distribution public contract")
 
 
 def test_ci_exposes_one_stable_required_aggregate() -> None:

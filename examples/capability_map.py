@@ -17,7 +17,9 @@ Why: Earlier versions of the bash hooks used raw substring matching on
          1. Stripping bodies only for definite, unquoted heredoc
             operators, so ``cat <<EOF ... git push --force ... EOF``
             is not scanned as commands while ``echo '<<EOF'`` remains
-            literal data.
+            literal data. Expanding bodies containing active command or
+            arithmetic expansion are rejected instead of elided, and their
+            delimiter lines are matched after backslash-newline folding.
          2. Normalizing active Bash backslash-newline continuations for
             brace, pathname-expansion, and comment analysis, then returning
             ``unknown`` for active unquoted brace expansion or pathname
@@ -49,10 +51,11 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             unmodeled execution syntax. Hooks must reject ``unknown`` rather
             than passing it to policy fallback.
 
-         9. Returning ``unknown`` for active command substitution. The
-            bounded parser does not attempt to interpret embedded backtick
-            or ``$()`` commands; single-quoted and escaped forms remain
-            literal data.
+         9. Returning unknown for active command and arithmetic expansion.
+            The bounded parser does not interpret those active forms;
+            single-quoted and escaped forms remain literal data. Options for
+            arithmetic-sensitive builtins also fail closed when parameter
+            expansion can change the option before execution.
 
 How to use: the bash hooks invoke
 ``python3 capability_map.py "<command>"`` and read the capability name
@@ -60,8 +63,8 @@ from stdout. ``main`` also accepts the command on stdin when no argv
 is given, which is convenient for piping from ``jq``.
 
 Scope: this is deliberately narrow. Full shell semantics (background jobs,
-function definitions) are not modeled. Active command and process
-substitution, visible dynamic argv execution, and Git subcommands outside a
+function definitions) are not modeled. Active command and process substitution,
+arithmetic expansion, visible dynamic argv execution, and Git subcommands outside a
 small builtin allowlist are rejected as ``unknown`` rather than parsed.
 Clear commands outside the narrow patterns fall back to ``shell``. Syntax
 the helper cannot parse confidently returns ``unknown`` so a wrapper can
@@ -71,8 +74,9 @@ Active unquoted brace and pathname expansion are rejected before ``shlex``
 because they can create arguments that are not visible in the raw token
 stream. The scanners use Bash logical lines after exact backslash-LF
 continuations are removed. Quoted or escaped expansion syntax, comments,
-parameter expansion, ordinary shell grouping, and stripped heredoc bodies do
-not trigger this fallback.
+simple parameter expansion, ordinary shell grouping, and quoted-delimiter
+heredoc bodies do not trigger this fallback. Arithmetic-bearing and indirect
+parameter expansions fail closed.
 
 This module is stdlib-only so it does not depend on ``agent_policy``
 and can be exercised by unit tests without the package install.
@@ -97,6 +101,41 @@ _BASH_LEXICAL_WHITESPACE = frozenset({" ", "\t", "\n"})
 # recurse into their argument so ``bash -c 'git push --force'`` is not
 # hidden from the scanner.
 _SHELL_WRAPPERS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+
+# Startup-file selectors for the shell wrappers above. BASH_ENV is read by
+# non-interactive Bash; ENV covers the modeled sh/dash/ksh family (and
+# interactive POSIX-mode Bash); ZDOTDIR selects zsh startup files. This is
+# intentionally a finite list:
+# arbitrary assignments remain classifiable, but a selector assignment is
+# unknown even when it is statement-only because this model has no shell state
+# machine to prove it cannot later reach a wrapper.
+_SHELL_STARTUP_FILE_SELECTORS = frozenset(
+    {"BASH_ENV", "ENV", "ZDOTDIR"}
+)
+
+# zsh reads system and user .zshenv files for every invocation, with HOME as
+# the fallback directory when ZDOTDIR is unset. That startup path cannot be
+# proven from command text, so zsh wrappers always fail closed.
+_UNMODELED_STARTUP_SHELLS = frozenset({"zsh"})
+
+# These builtins can stage a selector for a later shell wrapper. The bounded
+# parser recognizes only direct selector declarations; dynamically constructed
+# declaration names are unknown rather than interpreted.
+_SHELL_ASSIGNMENT_BUILTINS = frozenset(
+    {"declare", "export", "local", "readonly", "typeset"}
+)
+
+# ``let`` always evaluates arithmetic. The declaration builtins below can do
+# the same after an integer attribute is requested, including recursive
+# evaluation through a previously assigned variable value.
+_SHELL_ARITHMETIC_BUILTINS = frozenset({"let"})
+_SHELL_INTEGER_DECLARATION_BUILTINS = frozenset(
+    {"declare", "local", "readonly", "typeset"}
+)
+
+# These builtins interpret variable-name operands or mutate shell state using
+# semantics that can reach indexed-array arithmetic or startup selectors.
+_SHELL_UNMODELED_VARIABLE_BUILTINS = frozenset({"read", "unset"})
 
 # Strictness ordering. When a compound command mixes capabilities
 # (e.g. ``git status && git push --force``), the strictest one wins —
@@ -204,7 +243,9 @@ _UNMODELED_EXECUTION_PREFIXES = frozenset(
 _SHELL_SHORT_OPTIONS_WITHOUT_ARGUMENT = frozenset(
     "abcefhiklmnptuvxBCEHPT"
 )
-_SHELL_OPTIONS_WITH_VALUE = frozenset({"-o", "-O", "--init-file", "--rcfile"})
+_SHELL_OPTIONS_WITH_VALUE = frozenset({"-o", "-O"})
+_SHELL_STARTUP_OPTIONS_WITH_VALUE = frozenset({"--init-file", "--rcfile"})
+_SHELL_STARTUP_SHORT_OPTIONS = frozenset({"i", "l"})
 
 
 class _CommandParseError(ValueError):
@@ -236,12 +277,13 @@ def map_command(command: str, _depth: int = 0) -> str:
     try:
         stripped = _strip_heredocs(command)
         active_source = _normalize_active_line_continuations(stripped)
+        if _contains_active_arithmetic_expansion(active_source):
+            return "unknown"
         if _contains_active_unquoted_brace_expansion(active_source):
             return "unknown"
         if _contains_active_unquoted_pathname_expansion(active_source):
             return "unknown"
-        token_source = _mask_arithmetic_expansions_for_tokenization(active_source)
-        tokens = _tokenize(_separate_unquoted_newlines(token_source))
+        tokens = _tokenize(_separate_unquoted_newlines(active_source))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
         # unterminated heredoc makes the bounded parser uncertain. A hook
@@ -300,51 +342,6 @@ def _separate_unquoted_newlines(command: str) -> str:
             # Put the marker after the newline so it is outside a preceding
             # shell comment. Existing operator tokens still flush harmlessly.
             out.append(";")
-        index += 1
-    return "".join(out)
-
-
-def _mask_arithmetic_expansions_for_tokenization(command: str) -> str:
-    """Keep ``$((...))`` inside one shell word when shlex tokenizes it."""
-    out: list[str] = []
-    quote: str | None = None
-    index = 0
-    while index < len(command):
-        char = command[index]
-        if quote == "'":
-            out.append(char)
-            if char == quote:
-                quote = None
-            index += 1
-            continue
-        if char == "\\" and index + 1 < len(command):
-            out.append(command[index : index + 2])
-            index += 2
-            continue
-        if char == "#" and quote is None and _starts_comment(command, index):
-            newline = command.find("\n", index)
-            if newline < 0:
-                out.append(command[index:])
-                break
-            out.append(command[index:newline])
-            index = newline
-            continue
-        if char == "'" and quote is None:
-            out.append(char)
-            quote = "'"
-            index += 1
-            continue
-        if char == '"':
-            out.append(char)
-            quote = None if quote == '"' else '"'
-            index += 1
-            continue
-        if command.startswith("$((", index):
-            end = _skip_arithmetic_expression(command, index + 3)
-            out.append("__AGENT_POLICY_ARITHMETIC__")
-            index = end
-            continue
-        out.append(char)
         index += 1
     return "".join(out)
 
@@ -422,6 +419,132 @@ def _normalize_active_line_continuations(command: str) -> str:
         previous_escaped = False
         index += 1
     return "".join(out)
+
+
+def _contains_active_arithmetic_expansion(command: str) -> bool:
+    """Whether active arithmetic reaches the bounded parser before shlex.
+
+    Arithmetic expansion can resolve variables whose values trigger further
+    shell evaluation. Rather than distinguish literal-looking arithmetic from
+    dynamic forms, reject every active arithmetic expansion and arithmetic
+    command form. Quotes, escapes, and comments remain literal according to
+    the shell's lexical rules.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\":
+                if (
+                    index + 1 < len(command)
+                    and command[index + 1] in {"$", "\x60", '"', "\\", "\n"}
+                ):
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if (
+                command.startswith("$((", index)
+                or command.startswith("$[", index)
+            ):
+                return True
+            if command.startswith("${", index):
+                end = _skip_parameter_expansion(command, index)
+                if _parameter_expansion_has_arithmetic_context(
+                    command[index + 2 : max(index + 2, end - 1)]
+                ):
+                    return True
+                index = end
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                return False
+            index = newline + 1
+            continue
+        if command.startswith("$((", index) or command.startswith("$[", index):
+            return True
+        if command.startswith("${", index):
+            end = _skip_parameter_expansion(command, index)
+            if _parameter_expansion_has_arithmetic_context(
+                command[index + 2 : max(index + 2, end - 1)]
+            ):
+                return True
+            index = end
+            continue
+        if command.startswith("((", index) and (
+            index == 0 or command[index - 1] != "$"
+        ):
+            return True
+        index += 1
+    return False
+
+
+def _parameter_expansion_has_arithmetic_context(body: str) -> bool:
+    """Whether a parameter expansion contains a bounded arithmetic context."""
+    if body.startswith("!"):
+        # Indirect expansion can resolve a caller-controlled value to an
+        # indexed-array reference whose subscript is evaluated arithmetically.
+        return True
+
+    # Inspect nested parameter expansions before identifying the outer
+    # parameter's operator.
+    nested = 0
+    while True:
+        nested = body.find("${", nested)
+        if nested < 0:
+            break
+        end = _skip_parameter_expansion(body, nested)
+        if _parameter_expansion_has_arithmetic_context(
+            body[nested + 2 : max(nested + 2, end - 1)]
+        ):
+            return True
+        nested = max(end, nested + 2)
+
+    index = 0
+    if index < len(body) and body[index] == "#":
+        index += 1
+    if index >= len(body):
+        return False
+    if body[index] in "@*#?$!-":
+        index += 1
+    elif body[index].isdigit():
+        while index < len(body) and body[index].isdigit():
+            index += 1
+    elif body[index].isalpha() or body[index] == "_":
+        index += 1
+        while index < len(body) and (body[index].isalnum() or body[index] == "_"):
+            index += 1
+    else:
+        return False
+
+    # An indexed-array subscript immediately following the parameter name is
+    # arithmetic. Brackets in a default value or replacement pattern remain
+    # ordinary data and are not rejected by this bounded check.
+    if index < len(body) and body[index] == "[":
+        return True
+
+    remainder = body[index:]
+    return bool(remainder.startswith(":")) and (
+        len(remainder) == 1 or remainder[1] not in "-=?+"
+    )
 
 
 def _contains_active_unquoted_brace_expansion(command: str) -> bool:
@@ -986,26 +1109,65 @@ def _find_heredoc_end(
     """Return the offset after a matching heredoc delimiter line."""
     line_start = body_start
     while True:
-        newline = command.find("\n", line_start)
-        if newline < 0:
-            line = command[line_start:]
-            after_line = len(command)
-        else:
-            line = command[line_start:newline]
-            after_line = newline + 1
-        line = line.removesuffix("\r")
+        line, after_line, has_newline = _read_heredoc_logical_line(
+            command,
+            line_start,
+            fold_continuations=expand_body,
+        )
         candidate = line.lstrip("\t") if strip_tabs else line
         if candidate == delimiter:
-            if expand_body and _contains_active_heredoc_substitution(
+            if expand_body and _contains_active_heredoc_expansion(
                 command[body_start:line_start]
             ):
                 raise _CommandParseError(
-                    "active command substitution in heredoc"
+                    "active expansion in heredoc"
                 )
             return after_line
-        if newline < 0:
+        if not has_newline:
             raise _CommandParseError("unterminated heredoc")
         line_start = after_line
+
+
+def _read_heredoc_logical_line(
+    command: str,
+    line_start: int,
+    *,
+    fold_continuations: bool,
+) -> tuple[str, int, bool]:
+    """Read one heredoc logical line for delimiter recognition."""
+    parts: list[str] = []
+    current = line_start
+    while True:
+        newline = command.find("\n", current)
+        has_newline = newline >= 0
+        if has_newline:
+            line = command[current:newline]
+            after_line = newline + 1
+        else:
+            line = command[current:]
+            after_line = len(command)
+        comparable = line.removesuffix("\r")
+        if (
+            fold_continuations
+            and has_newline
+            and not line.endswith("\r")
+            and _has_active_trailing_backslash(comparable)
+        ):
+            parts.append(comparable[:-1])
+            current = after_line
+            continue
+        parts.append(comparable)
+        return "".join(parts), after_line, has_newline
+
+
+def _has_active_trailing_backslash(line: str) -> bool:
+    """Whether a physical heredoc line ends in an unescaped backslash."""
+    count = 0
+    for char in reversed(line):
+        if char != "\\":
+            break
+        count += 1
+    return count % 2 == 1
 
 
 def _contains_unquoted_heredoc_operator(
@@ -1097,12 +1259,15 @@ def _skip_line_continuations(command: str, index: int) -> int:
             return index
 
 
-def _contains_active_heredoc_substitution(line: str) -> bool:
-    """Return whether an expanding heredoc line runs command substitution.
+def _contains_active_heredoc_expansion(line: str) -> bool:
+    """Return whether an expanding heredoc line runs active expansion.
+
+    Arithmetic expansion is rejected without interpreting its contents.
 
     Quote characters are literal inside a heredoc body. Backslash can quote
     ``\\``, ``$``, and backtick when the delimiter itself was unquoted.
     """
+    line = _normalize_expanding_heredoc_continuations(line)
     pos = 0
     while pos < len(line):
         if (
@@ -1114,8 +1279,27 @@ def _contains_active_heredoc_substitution(line: str) -> bool:
             continue
         if _starts_command_substitution(line, pos):
             return True
+        if line.startswith("$((", pos) or line.startswith("$[", pos):
+            return True
         pos += 1
     return False
+
+
+def _normalize_expanding_heredoc_continuations(body: str) -> str:
+    """Remove active backslash-LF pairs using expanding-heredoc rules."""
+    out: list[str] = []
+    index = 0
+    while index < len(body):
+        if body.startswith("\\\n", index):
+            index += 2
+            continue
+        if body[index] == "\\" and index + 1 < len(body):
+            out.append(body[index : index + 2])
+            index += 2
+            continue
+        out.append(body[index])
+        index += 1
+    return "".join(out)
 
 
 def _starts_comment(command: str, index: int) -> bool:
@@ -1159,7 +1343,11 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     """Classify a single statement (already split on operators)."""
     # Skip leading env assignments: ``FOO=bar git push --force``.
     i = 0
-    while i < len(tokens) and _is_env_assignment(tokens[i]):
+    while i < len(tokens):
+        if _is_shell_startup_selector_assignment(tokens[i]):
+            return "unknown"
+        if not _is_env_assignment(tokens[i]):
+            break
         if _is_git_config_assignment(tokens[i]):
             # Git reads GIT_CONFIG* assignments before it resolves push
             # defaults and aliases. Their effects are outside this static argv
@@ -1198,17 +1386,59 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         # A parameter-expanded command name can resolve to an interpreter or
         # Git executable after classification.
         return "unknown"
+    if (
+        head_basename in _SHELL_ASSIGNMENT_BUILTINS
+        and _has_shell_startup_selector_declaration(tokens[1:])
+    ):
+        return "unknown"
+    if head_basename == "set" and _changes_allexport_state(tokens[1:]):
+        return "unknown"
+    if head_basename in _SHELL_ARITHMETIC_BUILTINS:
+        return "unknown"
+    if (
+        head_basename in _SHELL_INTEGER_DECLARATION_BUILTINS
+        and (
+            _has_evaluating_declaration_option(tokens[1:])
+            or _has_parameter_expanded_option(tokens[1:], leading_only=True)
+        )
+    ):
+        return "unknown"
+    if (
+        head_basename in _SHELL_ASSIGNMENT_BUILTINS
+        and _has_arithmetic_variable_target(tokens[1:])
+    ):
+        return "unknown"
+    if head_basename in _SHELL_UNMODELED_VARIABLE_BUILTINS:
+        return "unknown"
+    if head_basename == "printf" and (
+        _printf_uses_variable_target(tokens[1:])
+        or _has_parameter_expanded_option(tokens[1:], leading_only=True)
+    ):
+        return "unknown"
+    if head_basename in {"test", "["} and (
+        any(option in {"-R", "-v"} for option in tokens[1:])
+        or _has_parameter_expanded_option(tokens[1:])
+    ):
+        return "unknown"
+    if head_basename == "[[":
+        return "unknown"
     if head_basename == "builtin":
         # ``printf`` only formats its remaining arguments; it cannot dispatch
         # another command. Other builtin targets (notably ``eval``, ``source``,
         # and ``exec``) remain outside this bounded model and fail closed.
         if len(tokens) >= 2 and tokens[1] == "printf":
+            if _printf_uses_variable_target(
+                tokens[2:]
+            ) or _has_parameter_expanded_option(tokens[2:], leading_only=True):
+                return "unknown"
             return "shell"
         return "unknown"
     if head_basename == "command":
         # ``command`` changes executable resolution and its bounded option
         # forms are not modeled. Failing closed prevents it from hiding a
         # nested shell wrapper from the force-push guardrail.
+        return "unknown"
+    if head_basename in _UNMODELED_STARTUP_SHELLS:
         return "unknown"
     if head_basename in _SHELL_WRAPPERS:
         return _classify_wrapper_c(tokens[1:], depth)
@@ -1321,8 +1551,16 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
         if arg == "--":
             # A following ``-c`` is a script filename, not a shell option.
             return "unknown"
+        if arg in _SHELL_STARTUP_OPTIONS_WITH_VALUE:
+            return "unknown"
+        if _shell_short_option_cluster_reads_startup_files(arg):
+            return "unknown"
         if _is_shell_short_option_cluster_with_c(arg):
             if j + 1 >= len(args):
+                return "unknown"
+            # Positional parameters, redirections, and stdin after the body
+            # can change the nested shell's behavior outside this model.
+            if j + 2 != len(args):
                 return "unknown"
             return map_command(args[j + 1], _depth=depth + 1)
         if arg in _SHELL_OPTIONS_WITH_VALUE:
@@ -1347,6 +1585,13 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
 def _is_shell_short_option_cluster_with_c(arg: str) -> bool:
     """True for a bounded Bash short-option cluster containing ``c``."""
     return _is_shell_short_option_cluster(arg) and "c" in arg[1:]
+
+
+def _shell_short_option_cluster_reads_startup_files(arg: str) -> bool:
+    """Whether a bounded short-option cluster enables startup-file loading."""
+    return _is_shell_short_option_cluster(arg) and bool(
+        _SHELL_STARTUP_SHORT_OPTIONS.intersection(arg[1:])
+    )
 
 
 def _is_shell_short_option_cluster(arg: str) -> bool:
@@ -1376,6 +1621,8 @@ def _env_command_start(args: list[str]) -> int | None:
         arg = args[index]
         if arg == "--":
             return index + 1
+        if _is_shell_startup_selector_assignment(arg):
+            return None
         if _is_env_assignment(arg):
             if _is_git_config_assignment(arg):
                 return None
@@ -1460,6 +1707,117 @@ def _has_force_flag(push_args: list[str]) -> bool:
             return True
         index += 1
     return False
+
+
+def _is_shell_startup_selector_assignment(token: str) -> bool:
+    """Whether an assignment directly sets a modeled startup selector."""
+    name = _shell_assignment_name(token)
+    return name in _SHELL_STARTUP_FILE_SELECTORS
+
+
+def _has_evaluating_declaration_option(tokens: list[str]) -> bool:
+    """Whether a declaration enables array, integer, or nameref evaluation."""
+    for token in tokens:
+        if token == "--":
+            return False
+        if token.startswith(("-", "+")) and not token.startswith(("--", "++")):
+            if {"A", "a", "i", "n"}.intersection(token[1:]):
+                return True
+            continue
+        return False
+    return False
+
+
+def _has_arithmetic_variable_target(tokens: list[str]) -> bool:
+    """Whether a declaration names an indexed-array or dynamic target."""
+    options = True
+    for token in tokens:
+        if options and token == "--":
+            options = False
+            continue
+        if options and token.startswith(("-", "+")):
+            continue
+        options = False
+        target = token.split("=", 1)[0]
+        if any(marker in target for marker in ("[", "]", "$")):
+            return True
+    return False
+
+
+def _printf_uses_variable_target(tokens: list[str]) -> bool:
+    """Whether Bash printf uses its variable-name destination option."""
+    for token in tokens:
+        if token == "--":
+            return False
+        if token == "-v" or token.startswith("-v"):
+            return True
+        if not token.startswith("-"):
+            return False
+    return False
+
+
+def _has_parameter_expanded_option(
+    tokens: list[str],
+    *,
+    leading_only: bool = False,
+) -> bool:
+    """Whether an option token can change after parameter expansion."""
+    for token in tokens:
+        if token == "--":
+            return False
+        if "$" in token and token.startswith(("-", "$")):
+            return True
+        if leading_only and not token.startswith("-"):
+            return False
+    return False
+
+
+def _changes_allexport_state(tokens: list[str]) -> bool:
+    """Whether set changes allexport, which can export a staged selector."""
+    for index, token in enumerate(tokens):
+        if token in {"-o", "+o"}:
+            if index + 1 < len(tokens) and tokens[index + 1] == "allexport":
+                return True
+            continue
+        if (
+            len(token) > 1
+            and token.startswith(("-", "+"))
+            and not token.startswith(("--", "++"))
+            and "a" in token[1:]
+        ):
+            return True
+    return False
+
+
+def _has_shell_startup_selector_declaration(tokens: list[str]) -> bool:
+    """Whether an assignment builtin directly or dynamically names a selector."""
+    for token in tokens:
+        if _is_shell_startup_selector_declaration(token):
+            return True
+        if "$" in token.split("=", 1)[0]:
+            return True
+    return False
+
+
+def _is_shell_startup_selector_declaration(token: str) -> bool:
+    """Whether a declaration token names a modeled startup selector."""
+    return (
+        _shell_assignment_name(token) or token
+    ) in _SHELL_STARTUP_FILE_SELECTORS
+
+
+def _shell_assignment_name(token: str) -> str | None:
+    """Return a shell assignment name, including the append-assignment form."""
+    if "=" not in token:
+        return None
+    name = token.split("=", 1)[0]
+    if name.endswith("+"):
+        name = name[:-1]
+    if not name or name[0].isdigit():
+        return None
+    if not all(char.isalnum() or char == "_" for char in name):
+        return None
+    return name
 
 
 def _is_env_assignment(token: str) -> bool:

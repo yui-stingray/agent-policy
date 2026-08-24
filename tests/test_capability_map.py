@@ -153,8 +153,6 @@ def test_active_command_substitution_returns_unknown(command: str) -> None:
         # otherwise expanding heredoc body.
         "cat <<EOF\n\\$(git push --force origin main)\nEOF",
         "cat <<EOF\n\\`git push --force origin main\\`\nEOF",
-        # Arithmetic expansion is not command substitution.
-        'echo "$((1 + 2))"',
         'bash -c \'printf "%s\\n" "$HOME"\'',
         "builtin printf '%s\\n' ok",
     ],
@@ -183,9 +181,96 @@ def test_logical_line_comment_boundaries(command: str, expected: str) -> None:
     assert map_command(command) == expected
 
 
-def test_arithmetic_shift_is_shell_but_nested_command_substitution_is_unknown() -> None:
-    assert map_command("((x = 1 << 2))") == "shell"
+@pytest.mark.parametrize(
+    "command",
+    [
+        "A='x[$(git push --force origin main)]'; : $((A))",
+        "((A))",
+        "$[A]",
+        "A='x[$(git push --force origin main)]'; let A",
+        "A='x[$(git push --force origin main)]'; declare -i A",
+        "A='x[$(git push --force origin main)]'; typeset -ir A",
+        "A='x[$(git push --force origin main)]'; local +i A",
+        "A='x[$(git push --force origin main)0]'; declare -n ref='x[A]'",
+        "A='x[$(git push --force origin main)0]'; "
+        "declare -a x='([A]=value)'",
+        "A='x[$(git push --force origin main)0]'; printf -v 'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; printf -v'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; opt=v; "
+        "printf -$opt 'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; opt=v; "
+        "builtin printf -$opt 'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; dash=-; opt=v; "
+        "printf ${dash}${opt} 'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; opt=a; "
+        "declare -$opt x='([A]=value)'",
+        "A='x[$(git push --force origin main)0]'; "
+        "builtin printf -v 'x[A]' '%s' ok",
+        "A='x[$(git push --force origin main)0]'; unset 'x[A]'",
+        "A='x[$(git push --force origin main)0]'; read 'x[A]' <<< ok",
+        "A='x[$(git push --force origin main)0]'; test -v 'x[A]'",
+        "A='x[$(git push --force origin main)0]'; opt=v; test -$opt 'x[A]'",
+        "A='x[$(git push --force origin main)0]'; value=abc; : ${value:A}",
+        "A='x[$(git push --force origin main)0]'; : ${x[A]}",
+        "A='x[$(git push --force origin main)0]'; name='x[A]'; : ${!name}",
+        "A='x[$(git push --force origin main)0]'; "
+        "value=abc; : ${value:-${value:A}}",
+        'echo "$((A))"',
+        "cat <<EOF\n$((A))\nEOF",
+        "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
+        "$\\\n((A))\nEOF",
+        "A='x[$(git push --force origin main)0]'; cat <<EOF\n"
+        "$\\\n[A]\nEOF",
+    ],
+)
+def test_active_arithmetic_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '$((A)) $[A] ((A))'",
+        r"echo \$((A))",
+        r"echo \$\[A\]",
+        r"echo \(\(A\)\)",
+        r'echo "\$((A))"',
+        "cat <<'EOF'\n$((A))\nEOF",
+        "cat <<EOF\n\\$\\\n((A))\nEOF",
+        "value=abc; printf '%s' \"${value:-safe}\"",
+        "value=abc; printf '%s' \"${value:-[safe]}\"",
+        "option=v; printf '%s' \"-$option\"",
+    ],
+)
+def test_literal_arithmetic_forms_remain_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+def test_arithmetic_command_with_nested_substitution_is_unknown() -> None:
+    assert map_command("((x = 1 << 2))") == "unknown"
     assert map_command("((x = $(printf 1) << 2))") == "unknown"
+
+
+def test_expanding_heredoc_delimiter_uses_logical_lines() -> None:
+    command = (
+        "cat <<EOF\n"
+        "EO\\\n"
+        "F\n"
+        "git push --force origin main\n"
+        "EOF"
+    )
+    assert map_command(command) == "push.force"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<EOF\nEO\\\\\nF\nEOF",
+        "cat <<'EOF'\nEO\\\nF\nEOF",
+    ],
+)
+def test_literal_heredoc_delimiter_continuations_remain_body(command: str) -> None:
+    assert map_command(command) == "shell"
 
 
 @pytest.mark.parametrize("command", BRACE_EXPANSION_BYPASSES)
@@ -276,11 +361,6 @@ EOF""",
         "PATTERN=* git status",
         "SECOND=? FIRST=* git status",
         "echo hi\nPATTERN=* git status",
-        "X=$((2*3)) git status",
-        "X=pre$((2*3))post git status",
-        "X=$((1+(2*3))) git status",
-        "X=pre$((1+(2*3)))post git status",
-        "printf '%s' $[2*3]",
     ],
 )
 def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
@@ -332,9 +412,74 @@ def test_force_push_is_detected(command: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "command",
+    [
+        "BASH_ENV=/dev/stdin bash -c 'echo SAFE' <<< 'git push --force origin main'",
+        "BASH_ENV=/tmp/agent-policy-startup bash -c 'echo SAFE'",
+        "env BASH_ENV=/tmp/agent-policy-startup bash -c 'echo SAFE'",
+        "BASH_ENV=/tmp/agent-policy-startup",
+        "export BASH_ENV=/tmp/agent-policy-startup; bash -c 'echo SAFE'",
+        "ENV=/tmp/agent-policy-startup sh -ic 'echo SAFE'",
+        "ENV=/tmp/agent-policy-startup dash -ic 'echo SAFE'",
+        "ENV=/tmp/agent-policy-startup ksh -ic 'echo SAFE'",
+        "ZDOTDIR=/tmp/agent-policy-startup zsh -c 'echo SAFE'",
+        "HOME=/tmp/agent-policy-startup zsh -c 'echo SAFE'",
+        "HOME=/tmp/agent-policy-startup bash -lc 'echo SAFE'",
+        "HOME=/tmp/agent-policy-startup bash -ic 'echo SAFE'",
+        "bash --rcfile /tmp/agent-policy-startup -ic 'echo SAFE'",
+        "bash --init-file /tmp/agent-policy-startup -ic 'echo SAFE'",
+        "set -a",
+        "set -o allexport",
+        "set -o nounset -a",
+        "set -a; printf -v BASH_ENV /dev/stdin; bash -c 'echo SAFE'",
+        "read BASH_ENV <<< /dev/stdin; bash -c 'echo SAFE'",
+    ],
+)
+def test_shell_startup_selector_assignments_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'echo SAFE' argument",
+        "bash -c 'echo SAFE' </dev/null",
+    ],
+)
+def test_shell_wrapper_post_body_tokens_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'echo SAFE'",
+        "FOO=bar bash -c 'echo SAFE'",
+        "declare value=1",
+        "typeset -r value=1",
+        "set -u",
+        "set -o nounset",
+    ],
+)
+def test_shell_wrapper_without_trailing_tokens_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "HOME=/tmp/reviewed-home printf '%s' ok",
+        "env HOME=/tmp/reviewed-home printf '%s' ok",
+    ],
+)
+def test_home_assignment_outside_zsh_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
     ("command", "capability"),
     [
-        ("bash -lc \"git push --force origin main\"", "push.force"),
+        ("bash -lc \"git push --force origin main\"", "unknown"),
         ("env bash -c \"git push --force origin main\"", "push.force"),
         ("cat <(bash -c \"git push --force origin main\")", "unknown"),
         ("git -C /tmp push --force origin main", "push.force"),
