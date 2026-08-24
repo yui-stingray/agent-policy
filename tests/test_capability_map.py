@@ -387,12 +387,9 @@ def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
         "git send-pack --force origin HEAD:main",
         "git-send-pack --force origin HEAD:main",
         "git-push --force origin main",
-        "/usr/lib/git-core/git-push --force origin main",
         "git push -f origin main",
         # Short-option cluster: -fu == -f -u.
         "git push -fu origin main",
-        # Absolute path to git — basename normalization.
-        "/usr/bin/git push --force origin main",
         # Scan-anywhere: sudo wrapper.
         "sudo git push --force origin main",
         # Compound command: strictest wins.
@@ -620,7 +617,6 @@ def test_command_dispatch_before_shell_wrapper_returns_unknown() -> None:
         "gh pr merge 42 --merge",
         "gh pr merge --squash",
         "sudo gh pr merge 99",
-        "/usr/local/bin/gh pr merge 1",
     ],
 )
 def test_gh_pr_merge_is_detected(command: str) -> None:
@@ -848,6 +844,13 @@ def test_modeled_simple_command_allowlist_remains_shell(command: str) -> None:
         "python -c 'print(1)'",
         "awk 'BEGIN { system(\"true\") }'",
         "make test",
+        "/tmp/printf harmless",
+        "./cat /dev/null",
+        "/attacker/true",
+        "/usr/bin/git push --force origin main",
+        "/usr/lib/git-core/git-push --force origin main",
+        "/usr/local/bin/gh pr merge 1",
+        "sudo /usr/bin/git push --force origin main",
         f"git push --{{f.{ESCAPED_BACKSLASH_NEWLINE}.f}}force origin main",
         r"true\\ #x; git push --{force,force} origin main",
     ],

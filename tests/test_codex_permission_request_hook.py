@@ -133,6 +133,10 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "git-push --mirror --receive-pack='sh -c \"git push origin main\"' "
     "origin main",
     "git push --unknown-option --force origin main",
+    "/tmp/printf harmless",
+    "./cat /dev/null",
+    "/attacker/true",
+    "sudo /usr/bin/git push --force origin main",
     r"true\\ #x; git push --{force,force} origin main",
 )
 BASH_LINE_CONTINUATION = "\\" + "\n"

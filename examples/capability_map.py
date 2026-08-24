@@ -41,6 +41,8 @@ Why: Earlier versions of the bash hooks used raw substring matching on
 
          6. Returning ``unknown`` unless each simple-command head belongs to a
             finite allowlist or a separately modeled Git/shell-wrapper path.
+            Path-qualified command heads are rejected because a familiar
+            basename does not establish the executable's implementation.
             This prevents callback-bearing builtins and unfamiliar command
             dispatchers from inheriting a policy-controlled ``shell`` result.
 
@@ -1401,6 +1403,9 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     if _is_env_assignment(tokens[0]):
         return "unknown"
 
+    if _is_path_qualified_command(tokens[0]):
+        return "unknown"
+
     # Unwrap the one common command prefix this example models. Unknown sudo
     # option forms fail closed because they can consume following arguments.
     while os.path.basename(tokens[0]) == "sudo":
@@ -1415,6 +1420,8 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         if _is_env_assignment(tokens[0]):
             # sudo accepts VAR=value before its command. Re-tokenizing that
             # mini-language is outside this bounded model.
+            return "unknown"
+        if _is_path_qualified_command(tokens[0]):
             return "unknown"
 
     if _starts_with_redirection(tokens):
@@ -1547,6 +1554,11 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     if basename in _MODELED_SIMPLE_COMMANDS:
         return "shell"
     return "unknown"
+
+
+def _is_path_qualified_command(command: str) -> bool:
+    """Whether a POSIX shell command head names a path, not a bare command."""
+    return "/" in command
 
 
 def _starts_with_redirection(tokens: list[str]) -> bool:

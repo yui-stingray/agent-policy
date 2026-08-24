@@ -370,9 +370,9 @@ with `pip install -e .`; public users who need the released library should use
   produce a false `push.force` classification. Active arithmetic, active
   unquoted brace or pathname expansion, every shell or environment assignment,
   state-mutating and callback-bearing builtins, xtrace wrappers, selected
-  visible dynamic argv execution, unlisted command heads, and Git subcommands
-  outside the bounded builtin allowlist become `unknown` and are rejected
-  before policy evaluation. See the file header for the exact bounded flow:
+  visible dynamic argv execution, path-qualified or unlisted command heads,
+  and Git subcommands outside the bounded builtin allowlist become `unknown`
+  and are rejected before policy evaluation. See the file header for the exact bounded flow:
   heredoc stripping, expansion screening, `shlex` tokenization, statement
   classification, and recursive `bash -c` / `eval` handling.
 
@@ -441,9 +441,12 @@ shell commands.
   Forms such as `git -c alias.p=push p --force`, process substitution, or
   function definitions are not modeled. Command heads outside the finite
   allowlist, including general interpreters and build/test runners, map to
-  `unknown`; ambiguous, unbalanced, or unterminated parsing is rejected the
-  same way. The helper classifies command text only and does not inspect the
-  internals of allowlisted executables or inherited process state.
+  `unknown`. Path-qualified heads such as `/tmp/printf` and `./cat` also map to
+  `unknown`; matching a basename is not proof that the referenced executable is
+  the modeled command. Ambiguous, unbalanced, or unterminated parsing is
+  rejected the same way. The helper classifies command text only and does not
+  inspect the internals of bare allowlisted executables or inherited process
+  state.
 
 ## Releases
 
