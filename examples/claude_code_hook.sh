@@ -48,9 +48,10 @@
 #   Read / Glob / Grep         → read
 #   Edit / Write / NotebookEdit → write
 #   Bash:
-#     git push ... --force[-with-lease] / -f → push.force
-#     gh pr merge ...                        → merge.pr
-#     anything else                          → shell
+#     git push ... --force[-with-lease] / -f -> push.force
+#     gh pr merge ...                        -> merge.pr
+#     finite simple-command allowlist        -> shell
+#     anything else                          -> unknown (block)
 #   any other tool             → block explicitly
 #
 # Bash parsing: delegated to examples/capability_map.py, which uses
@@ -60,7 +61,8 @@
 # accepted limitations.
 #
 # Limitations (fine for an example, not for production):
-# - Tokenization is heuristic. Exotic forms such as
+# - Tokenization is heuristic. Assignments, state-changing or callback-bearing
+#   builtins, xtrace, unlisted command heads, and forms such as
 #   `git --git-dir=/path push --force` or process substitution are
 #   not fully modeled. Ambiguous, unbalanced, or unterminated syntax maps
 #   to `unknown` and blocks before policy evaluation. Compound statements
@@ -69,9 +71,9 @@
 #   workflows, wrap check.py in a long-lived subprocess instead.
 
 # Bash processes the hook process's inherited startup environment before this
-# file runs; that launcher boundary is trusted. Payload commands that assign
-# startup-file selectors are rejected by capability_map.py. This must be the
-# first executable statement so inherited xtrace cannot expose hook inputs.
+# file runs; that launcher boundary is trusted. capability_map.py rejects
+# command-text assignments. This must be the first executable statement so
+# inherited xtrace cannot expose hook inputs.
 set +x
 set -Eeuo pipefail
 

@@ -4,7 +4,8 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.14` alpha. The core evaluator API is stable for v0.1;
+**Status**: Unreleased source `0.1.15.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.14`; the core evaluator API is stable for v0.1, while
 additive wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
@@ -352,9 +353,10 @@ with `pip install -e .`; public users who need the released library should use
   hook's environment, then point `~/.claude/settings.json` at it. Unknown
   tools and wrapper failures block with fixed sanitized stderr.
 - `codex_hook.sh` — a Codex CLI `PreToolUse` hook (**block-style shell
-  guardrail pilot**). This wrapper only maps Bash commands: `git push
-  --force` to `push.force`, `gh pr merge` to `merge.pr`, and everything else
-  to `shell`. Codex hooks themselves can match more than Bash; this example is
+  guardrail pilot**). This wrapper only maps bounded Bash commands: visible
+  force-push forms to `push.force`, `gh pr merge` to `merge.pr`, and a finite
+  allowlist of simple commands to `shell`. Other forms become `unknown` and
+  block. Codex hooks themselves can match more than Bash; this example is
   intentionally narrower.
 - `codex_permission_request_hook.sh` — a Codex CLI `PermissionRequest` hook
   (**delegation shell pilot**). It returns `allow` for `auto_allow`, returns
@@ -366,11 +368,12 @@ with `pip install -e .`; public users who need the released library should use
   wrappers shell out to it instead of doing substring matching, so
   quoted literals like `printf '%s\n' 'git push --force'` no longer
   produce a false `push.force` classification. Active arithmetic, active
-  unquoted brace or pathname expansion, shell startup selectors and state,
-  selected visible dynamic argv execution, and Git subcommands outside the
-  bounded builtin allowlist become `unknown` and are rejected before policy
-  evaluation. See the file header for the exact bounded flow: heredoc
-  stripping, expansion screening, `shlex` tokenization, statement
+  unquoted brace or pathname expansion, every shell or environment assignment,
+  state-mutating and callback-bearing builtins, xtrace wrappers, selected
+  visible dynamic argv execution, unlisted command heads, and Git subcommands
+  outside the bounded builtin allowlist become `unknown` and are rejected
+  before policy evaluation. See the file header for the exact bounded flow:
+  heredoc stripping, expansion screening, `shlex` tokenization, statement
   classification, and recursive `bash -c` / `eval` handling.
 
 ### Codex CLI hooks — current contract notes
@@ -397,8 +400,9 @@ shell commands.
   `require_approval`.
 - **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
   not a full shell. It handles quoted literals, heredocs, compound
-  statements, a bounded set of Git global options such as `--git-dir=/path`,
-  a deliberate Git builtin allowlist (`status`, `add`, `commit`, `diff`,
+  statements, a finite simple-command allowlist, a bounded set of Git global
+  options such as `--git-dir=/path`, and deliberate Git builtin and
+  subcommand-option allowlists (`status`, `add`, `commit`, `diff`,
   `fetch`, `push`, and `send-pack`), and the common `bash -c '...'` /
   `eval` wrappers. Active arithmetic is not interpreted, including `$((...))`,
   `((...))`, legacy `$[...]`, `let`, array/integer/nameref declarations,
@@ -408,17 +412,20 @@ shell commands.
   evaluate variable values and array subscripts recursively. Expanding
   heredocs are checked after active backslash-newline folding. Active unquoted
   brace or pathname expansion, selected visible `xargs` and `find -exec`-style argv generation,
-  and Git subcommands outside that allowlist (including
-  `config` alias mutation) also map to `unknown`. Leading `GIT_CONFIG*`
-  assignments and shell startup-file selectors such as `BASH_ENV`, imported
-  shell state through `SHELLOPTS`, allexport wrapper options, `wait -p`
-  assignment, and trap mutation map to
-  `unknown` because they can change execution before visible argv is
-  evaluated. Interactive/login shell modes and explicit `--rcfile` /
-  `--init-file` inputs are also rejected because they execute startup files
-  before the inspected body. A modeled shell wrapper is accepted only when
-  `-c` has exactly one inspected command body; trailing arguments or
-  redirections are not modeled and therefore fail closed.
+  and Git subcommands outside that allowlist (including `config` alias
+  mutation) also map to `unknown`. Unlisted options on a recognized Git
+  subcommand also fail closed; this rejects command-bearing program selectors
+  such as `--receive-pack`, `--upload-pack`, and `--exec`, including abbreviated
+  forms. All leading assignments, assignments passed
+  through `env`, assignment builtins, and `set` forms are rejected without a
+  variable-name denylist. This covers startup selectors such as `BASH_ENV`,
+  trace expansion through `PS4`, and Git transport selectors such as
+  `GIT_SSH_COMMAND`. Callback-bearing builtins such as `mapfile`, `readarray`,
+  and `compgen` are outside the allowlist. Interactive/login shell modes,
+  xtrace, and explicit `--rcfile` / `--init-file` inputs are rejected because
+  they can execute input before or around the inspected body. A modeled shell
+  wrapper is accepted only when `-c` has exactly one inspected command body;
+  trailing arguments or redirections are not modeled and therefore fail closed.
   Parameter-expanded builtin options fail closed, and expanding-heredoc
   delimiters are matched after backslash-newline folding so following commands
   cannot be mistaken for heredoc data.
@@ -432,9 +439,11 @@ shell commands.
   Leading redirection, known execution prefixes such as `exec`, `time`, and
   `nohup`, grouping, and shell compound keywords also map to `unknown`.
   Forms such as `git -c alias.p=push p --force`, process substitution, or
-  function definitions are not modeled. Clear commands
-  outside the narrow patterns map to `shell`, while ambiguous, unbalanced,
-  or unterminated parsing maps to `unknown` and is rejected by the hooks.
+  function definitions are not modeled. Command heads outside the finite
+  allowlist, including general interpreters and build/test runners, map to
+  `unknown`; ambiguous, unbalanced, or unterminated parsing is rejected the
+  same way. The helper classifies command text only and does not inspect the
+  internals of allowlisted executables or inherited process state.
 
 ## Releases
 
