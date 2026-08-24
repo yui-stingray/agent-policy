@@ -245,11 +245,8 @@ def test_active_arithmetic_returns_unknown(command: str) -> None:
         r'echo "\$((A))"',
         "cat <<'EOF'\n$((A))\nEOF",
         "cat <<EOF\n\\$\\\n((A))\nEOF",
-        "value=abc; printf '%s' \"${value:-safe}\"",
-        "value=abc; printf '%s' \"${value:-[safe]}\"",
         "printf '%s' \"${missing:-\\$((A))}\"",
         "printf '%s' \"${missing:-((safe))}\"",
-        "option=v; printf '%s' \"-$option\"",
     ],
 )
 def test_literal_arithmetic_forms_remain_shell(command: str) -> None:
@@ -269,7 +266,7 @@ def test_deep_parameter_expansion_word_is_processed_once_per_level() -> None:
     assert map_command(f'printf %s "{word}"') == "shell"
 
 
-def test_expanding_heredoc_delimiter_uses_logical_lines() -> None:
+def test_expanding_heredoc_with_later_unmodeled_command_fails_closed() -> None:
     command = (
         "cat <<EOF\n"
         "EO\\\n"
@@ -277,7 +274,7 @@ def test_expanding_heredoc_delimiter_uses_logical_lines() -> None:
         "git push --force origin main\n"
         "EOF"
     )
-    assert map_command(command) == "push.force"
+    assert map_command(command) == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -312,21 +309,16 @@ def test_valid_brace_sequence_returns_unknown(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        "git push '--{force,force}' origin main",
-        'git push "--{force,force}" origin main',
-        r"git push --\{force,force\} origin main",
         "echo ${value:-{force,force}}",
         "cat <<'EOF'\ngit push --{force,force} origin main\nEOF",
         f"printf '%s\\n' 'git push --{{f.{BASH_LINE_CONTINUATION}.f}}force'",
         f'printf \'%s\\n\' "git push --{{f.{BASH_LINE_CONTINUATION}.f}}force"',
-        f"git push --{{f.{ESCAPED_BACKSLASH_NEWLINE}.f}}force origin main",
         f"printf '%s\\n' 'true{BASH_LINE_CONTINUATION}#x; "
         "git push --{force,force} origin main'",
         f"true # comment {BASH_LINE_CONTINUATION}"
         "git push --{force,force} origin main",
         f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
         "true #x; git push --{force,force} origin main",
-        r"true\\ #x; git push --{force,force} origin main",
         r"printf '%s\n' 'true\ #x; "
         "git push --{force,force} origin main'",
         r"echo {\..a}",
@@ -367,18 +359,10 @@ def test_active_unquoted_pathname_expansion_returns_unknown(command: str) -> Non
     "command",
     [
         "printf '%s' 'git push --fo* origin main'",
-        "git push --fo\\* origin main",
         "true # git push --fo* origin main",
         """cat <<EOF
 git push --fo* origin main
 EOF""",
-        "git push '--fo[rc]e' origin main",
-        "git push '--@(force|force)' origin main",
-        "git push --fo\\[rc\\]e origin main",
-        "git push --fo[] origin main",
-        "PATTERN=* git status",
-        "SECOND=? FIRST=* git status",
-        "echo hi\nPATTERN=* git status",
     ],
 )
 def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
@@ -403,15 +387,9 @@ def test_literal_pathname_expansion_controls_remain_shell(command: str) -> None:
         "git send-pack --force origin HEAD:main",
         "git-send-pack --force origin HEAD:main",
         "git-push --force origin main",
-        "/usr/lib/git-core/git-push --force origin main",
         "git push -f origin main",
         # Short-option cluster: -fu == -f -u.
         "git push -fu origin main",
-        # Leading env assignment — must be stripped before classification.
-        "FOO=bar git push --force origin main",
-        "GIT_SSH_COMMAND='ssh -i key' git push --force origin main",
-        # Absolute path to git — basename normalization.
-        "/usr/bin/git push --force origin main",
         # Scan-anywhere: sudo wrapper.
         "sudo git push --force origin main",
         # Compound command: strictest wins.
@@ -536,11 +514,6 @@ def test_shell_wrapper_post_body_tokens_return_unknown(command: str) -> None:
     "command",
     [
         "bash -c 'echo SAFE'",
-        "FOO=bar bash -c 'echo SAFE'",
-        "declare value=1",
-        "typeset -r value=1",
-        "set -u",
-        "set -o nounset",
     ],
 )
 def test_shell_wrapper_without_trailing_tokens_remains_shell(command: str) -> None:
@@ -554,8 +527,8 @@ def test_shell_wrapper_without_trailing_tokens_remains_shell(command: str) -> No
         "env HOME=/tmp/reviewed-home printf '%s' ok",
     ],
 )
-def test_home_assignment_outside_zsh_remains_shell(command: str) -> None:
-    assert map_command(command) == "shell"
+def test_home_assignment_outside_zsh_still_fails_closed(command: str) -> None:
+    assert map_command(command) == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -644,7 +617,6 @@ def test_command_dispatch_before_shell_wrapper_returns_unknown() -> None:
         "gh pr merge 42 --merge",
         "gh pr merge --squash",
         "sudo gh pr merge 99",
-        "/usr/local/bin/gh pr merge 1",
     ],
 )
 def test_gh_pr_merge_is_detected(command: str) -> None:
@@ -683,6 +655,99 @@ def test_compound_strictest_capability_wins() -> None:
     ],
 )
 def test_dynamic_argv_execution_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf 'x\\n' | mapfile -C 'git push --force origin main' -c 1 arr",
+        "printf 'x\\n' | readarray -C 'git push --force origin main' -c 1 arr",
+        "compgen -C 'git push --force origin main' x",
+    ],
+)
+def test_callback_builtins_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PS4='$(git push --force origin main)'; set -x; true",
+        "PS4='$(git push --force origin main)' bash -xc true",
+        "bash -xc true",
+        "bash -o xtrace -c true",
+        "VALUE=reviewed printf '%s' ok",
+        "env VALUE=reviewed printf '%s' ok",
+        "FOO=bar git push --force origin main",
+        "FOO=bar bash -c 'echo SAFE'",
+        "export VALUE=reviewed",
+        "declare value=1",
+        "typeset -r value=1",
+        "set -u",
+        "set -o nounset",
+        "value=abc; printf '%s' \"${value:-safe}\"",
+        "value=abc; printf '%s' \"${value:-[safe]}\"",
+        "option=v; printf '%s' \"-$option\"",
+        "PATTERN=* git status",
+        "SECOND=? FIRST=* git status",
+        "echo hi\nPATTERN=* git status",
+    ],
+)
+def test_unmodeled_shell_state_and_assignments_return_unknown(
+    command: str,
+) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "GIT_SSH_COMMAND='sh -c \"git push --force origin main\" dummy' "
+        "git push origin main",
+        "env GIT_SSH_COMMAND='sh -c \"git push --force origin main\" dummy' "
+        "git push origin main",
+        "GIT_SSH=reviewed-wrapper git push origin main",
+        "GIT_SSH_COMMAND='ssh -i reviewed-key' git push --force origin main",
+        "GIT_PROXY_COMMAND='sh -c \"git push --force origin main\"' "
+        "git fetch origin",
+        "export GIT_PROXY_COMMAND='sh -c \"git push --force origin main\"'; "
+        "git fetch origin",
+    ],
+)
+def test_command_bearing_git_environment_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push --receive-pack='sh -c true' origin main",
+        "git push --rece='sh -c true' origin main",
+        "git push --exec='sh -c true' origin main",
+        "git push --exe='sh -c true' origin main",
+        "git fetch --upload-pack='sh -c true' origin",
+        "git fetch --upl='sh -c true' origin",
+        "git send-pack --receive-pack='sh -c true' origin main",
+        "git-push --exec='sh -c true' origin main",
+        "git-send-pack --rece='sh -c true' origin main",
+        "git push --force --receive-pack='sh -c true' origin main",
+        "git push --rece='sh -c true' --force origin main",
+        "git send-pack --force --exec='sh -c true' origin main",
+        "git-push --mirror --receive-pack='sh -c true' origin main",
+        "git push --unknown-option --force origin main",
+        "git status --future-command-mode",
+        "git push '--{force,force}' origin main",
+        'git push "--{force,force}" origin main',
+        r"git push --\{force,force\} origin main",
+        "git push --fo\\* origin main",
+        "git push '--fo[rc]e' origin main",
+        "git push '--@(force|force)' origin main",
+        "git push --fo\\[rc\\]e origin main",
+        "git push --fo[] origin main",
+    ],
+)
+def test_unmodeled_git_subcommand_options_return_unknown(command: str) -> None:
     assert map_command(command) == "unknown"
 
 
@@ -746,11 +811,52 @@ def test_unmodeled_execution_prefixes_return_unknown(command: str) -> None:
         "git push origin main",
         "git push origin main --tags",
         "git commit -m 'wip'",
-        "pytest -q",
     ],
 )
 def test_plain_shell(command: str) -> None:
     assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ":",
+        "[ 1 = 1 ]",
+        "cat /dev/null",
+        "echo reviewed",
+        "false",
+        "ls -la",
+        "printf '%s' reviewed",
+        "pwd",
+        "printf reviewed | tee /dev/null",
+        "test 1 = 1",
+        "true",
+    ],
+)
+def test_modeled_simple_command_allowlist_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -q",
+        "python -c 'print(1)'",
+        "awk 'BEGIN { system(\"true\") }'",
+        "make test",
+        "/tmp/printf harmless",
+        "./cat /dev/null",
+        "/attacker/true",
+        "/usr/bin/git push --force origin main",
+        "/usr/lib/git-core/git-push --force origin main",
+        "/usr/local/bin/gh pr merge 1",
+        "sudo /usr/bin/git push --force origin main",
+        f"git push --{{f.{ESCAPED_BACKSLASH_NEWLINE}.f}}force origin main",
+        r"true\\ #x; git push --{force,force} origin main",
+    ],
+)
+def test_unmodeled_command_heads_return_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
 
 
 # ---------------------------------------------------------------------------

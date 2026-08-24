@@ -57,9 +57,10 @@
 #   2 — block; every non-allow outcome uses fixed sanitized stderr
 #
 # Capability mapping (Bash-only, intentionally narrow):
-#   git push ... --force[-with-lease] / -f → push.force
-#   gh pr merge ...                        → merge.pr
-#   anything else                          → shell
+#   git push ... --force[-with-lease] / -f -> push.force
+#   gh pr merge ...                        -> merge.pr
+#   finite simple-command allowlist        -> shell
+#   anything else                          -> unknown (block)
 #
 # Parsing: command → capability goes through examples/capability_map.py,
 # which uses shlex tokenization (not full shell semantics) so that
@@ -70,7 +71,8 @@
 # Limitations:
 # - This example covers only Bash PreToolUse payloads. Broader Codex hook
 #   matchers need their own capability normalization.
-# - Tokenization is heuristic, not a real shell. Exotic forms such as
+# - Tokenization is heuristic, not a real shell. Assignments, state-changing or
+#   callback-bearing builtins, xtrace, unlisted command heads, and forms such as
 #   `git --git-dir=/path push --force` or process substitution are
 #   not fully modeled. Ambiguous, unbalanced, or unterminated syntax maps
 #   to `unknown` and blocks before policy evaluation. Compound statements
@@ -78,9 +80,9 @@
 # - No caching: every Bash call shells out to python3.
 
 # Bash processes the hook process's inherited startup environment before this
-# file runs; that launcher boundary is trusted. Payload commands that assign
-# startup-file selectors are rejected by capability_map.py. This must be the
-# first executable statement so inherited xtrace cannot expose hook inputs.
+# file runs; that launcher boundary is trusted. capability_map.py rejects
+# command-text assignments. This must be the first executable statement so
+# inherited xtrace cannot expose hook inputs.
 set +x
 set -Eeuo pipefail
 

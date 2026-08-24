@@ -56,13 +56,14 @@
 #
 # Capability mapping (Bash-only, intentionally narrow):
 #   git push ... --force[-with-lease] / -f -> push.force
-#   gh pr merge ...                         -> merge.pr
-#   anything else                           -> shell
+#   gh pr merge ...                        -> merge.pr
+#   finite simple-command allowlist        -> shell
+#   anything else                          -> unknown (deny)
 
 # Bash processes the hook process's inherited startup environment before this
-# file runs; that launcher boundary is trusted. Payload commands that assign
-# startup-file selectors are rejected by capability_map.py. This must be the
-# first executable statement so inherited xtrace cannot expose hook inputs.
+# file runs; that launcher boundary is trusted. capability_map.py rejects
+# command-text assignments. This must be the first executable statement so
+# inherited xtrace cannot expose hook inputs.
 set +x
 set -Eeuo pipefail
 

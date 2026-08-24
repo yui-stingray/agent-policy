@@ -101,6 +101,38 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "HOME=/tmp/agent-policy-startup bash -lc 'echo SAFE'",
     "bash --rcfile /dev/stdin -ic 'echo SAFE'",
     "cat <<EOF\nEO\\\nF\ngit push --force origin main\nEOF",
+    "printf 'x\\n' | mapfile -C 'git push --force origin main' -c 1 arr",
+    "printf 'x\\n' | readarray -C 'git push --force origin main' -c 1 arr",
+    "compgen -C 'git push --force origin main' x",
+    "PS4='$(git push --force origin main)'; set -x; true",
+    "PS4='$(git push --force origin main)' bash -xc true",
+    "bash -o xtrace -c true",
+    "VALUE=reviewed printf '%s' ok",
+    "env VALUE=reviewed printf '%s' ok",
+    "export VALUE=reviewed; printf '%s' ok",
+    "python -c 'print(1)'",
+    "GIT_SSH_COMMAND='sh -c \"git push --force origin main\" dummy' "
+    "git push origin main",
+    "env GIT_SSH=reviewed-wrapper git push origin main",
+    "export GIT_PROXY_COMMAND='sh -c \"git push --force origin main\"'; "
+    "git fetch origin",
+    "git push --receive-pack='sh -c \"git push --force origin main\"' "
+    "origin main",
+    "git push --exe='sh -c \"git push --force origin main\"' origin main",
+    "git fetch --upload-pack='sh -c \"git push --force origin main\"' origin",
+    "git send-pack --rece='sh -c \"git push --force origin main\"' "
+    "origin main",
+    "git push --force --receive-pack='sh -c \"git push origin main\"' "
+    "origin main",
+    "git push --rece='sh -c \"git push origin main\"' --force origin main",
+    "git-push --mirror --receive-pack='sh -c \"git push origin main\"' "
+    "origin main",
+    "git push --unknown-option --force origin main",
+    "/tmp/printf harmless",
+    "./cat /dev/null",
+    "/attacker/true",
+    "sudo /usr/bin/git push --force origin main",
+    r"true\\ #x; git push --{force,force} origin main",
 )
 BASH_LINE_CONTINUATION = "\\" + "\n"
 BACKSLASH_CRLF = "\\" + "\r\n"
@@ -127,7 +159,6 @@ BRACE_EXPANSION_CONTROLS = (
     "git push --{force,force} origin main",
     f"true {BASH_LINE_CONTINUATION}# $(echo harmless)",
     "true #x; git push --{force,force} origin main",
-    r"true\\ #x; git push --{force,force} origin main",
     r"printf '%s\n' 'true\ #x; "
     "git push --{force,force} origin main'",
     r"echo {\..a}",

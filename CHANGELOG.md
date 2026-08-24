@@ -7,6 +7,15 @@ package is still alpha.
 
 ## Unreleased
 
+- Made the public example hooks fail closed on callback-bearing Bash builtins,
+  xtrace/`PS4` execution, command-bearing Git environment variables, shell
+  assignments, state-mutating builtins, command-bearing Git program options,
+  path-qualified command heads, and command heads outside finite command and
+  option allowlists before a `shell` or default `auto_allow` policy can apply.
+- Began the next development cycle as 0.1.15.dev0, distinct from the latest
+  public PyPI release 0.1.14, so unreleased artifacts cannot reuse its
+  immutable published identity.
+
 ## 0.1.14 - 2026-08-24
 
 - Made the example capability mapper fail closed on explicit and implicit Bash

@@ -36,11 +36,15 @@ Why: Earlier versions of the bash hooks used raw substring matching on
 
                 git push ... --force[-with-lease] / -f  → push.force
                 gh pr merge ...                         → merge.pr
-                anything else                           → shell
+                bounded simple commands                 → shell
+                every other command or state form       → unknown
 
-         6. Returning ``unknown`` for visible dynamic argv execution
-            forms (currently ``xargs`` and ``find -exec``-style
-            predicates) instead of guessing about generated arguments.
+         6. Returning ``unknown`` unless each simple-command head belongs to a
+            finite allowlist or a separately modeled Git/shell-wrapper path.
+            Path-qualified command heads are rejected because a familiar
+            basename does not establish the executable's implementation.
+            This prevents callback-bearing builtins and unfamiliar command
+            dispatchers from inheriting a policy-controlled ``shell`` result.
 
          7. Recursively classifying the embedded command when the
             statement is ``bash -c '...'`` / ``sh -c '...'`` / ``eval
@@ -64,12 +68,12 @@ from stdout. ``main`` also accepts the command on stdin when no argv
 is given, which is convenient for piping from ``jq``.
 
 Scope: this is deliberately narrow. Full shell semantics (background jobs,
-function definitions, and trap mutation) are not modeled. Active command and
-process substitution, arithmetic expansion, visible dynamic argv execution, and
+function definitions, shell-state mutation, and trap mutation) are not modeled.
+Active command and process substitution, arithmetic expansion, environment or
+shell assignments, visible dynamic argv execution, unlisted command heads, and
 Git subcommands outside a small builtin allowlist are rejected as ``unknown``
-rather than parsed.
-Clear commands outside the narrow patterns fall back to ``shell``. Syntax
-the helper cannot parse confidently returns ``unknown`` so a wrapper can
+rather than parsed. Only explicitly modeled simple commands return ``shell``;
+syntax the helper cannot parse confidently returns ``unknown`` so a wrapper can
 fail closed before policy evaluation.
 
 Active unquoted brace and pathname expansion are rejected before ``shlex``
@@ -104,49 +108,26 @@ _BASH_LEXICAL_WHITESPACE = frozenset({" ", "\t", "\n"})
 # hidden from the scanner.
 _SHELL_WRAPPERS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 
-# Startup-file selectors for the shell wrappers above. BASH_ENV is read by
-# non-interactive Bash; ENV covers the modeled sh/dash/ksh family (and
-# interactive POSIX-mode Bash); ZDOTDIR selects zsh startup files. This is
-# intentionally a finite list:
-# arbitrary assignments remain classifiable, but a selector assignment is
-# unknown even when it is statement-only because this model has no shell state
-# machine to prove it cannot later reach a wrapper.
-_SHELL_STARTUP_FILE_SELECTORS = frozenset(
-    {"BASH_ENV", "ENV", "ZDOTDIR"}
-)
-
-# SHELLOPTS can import allexport into a child Bash process. That state can turn
-# a later shell assignment into an exported startup-file selector, which this
-# bounded parser cannot track.
-_SHELL_STARTUP_STATE_SELECTORS = frozenset({"SHELLOPTS"})
-
 # zsh reads system and user .zshenv files for every invocation, with HOME as
 # the fallback directory when ZDOTDIR is unset. That startup path cannot be
 # proven from command text, so zsh wrappers always fail closed.
 _UNMODELED_STARTUP_SHELLS = frozenset({"zsh"})
 
-# These builtins can stage a selector for a later shell wrapper. The bounded
-# parser recognizes only direct selector declarations; dynamically constructed
-# declaration names are unknown rather than interpreted.
+# These builtins persist shell state. The bounded parser cannot prove their
+# names or values inert for later statements, so every form fails closed.
 _SHELL_ASSIGNMENT_BUILTINS = frozenset(
     {"declare", "export", "local", "readonly", "typeset"}
 )
 
-# ``let`` always evaluates arithmetic. The declaration builtins below can do
-# the same after an integer attribute is requested, including recursive
-# evaluation through a previously assigned variable value.
+# ``let`` always evaluates arithmetic.
 _SHELL_ARITHMETIC_BUILTINS = frozenset({"let"})
-_SHELL_INTEGER_DECLARATION_BUILTINS = frozenset(
-    {"declare", "local", "readonly", "typeset"}
-)
 
 # These builtins interpret variable-name operands or mutate shell state using
 # semantics that can reach indexed-array arithmetic or startup selectors.
 _SHELL_UNMODELED_VARIABLE_BUILTINS = frozenset({"read", "unset"})
 
-# ``wait -p`` assigns through a variable name. Indexed-array targets evaluate
-# arithmetic recursively, while allexport can turn a scalar target into a later
-# shell startup selector. The parser therefore does not model any ``wait -p``.
+# ``wait -p`` assigns through a variable name. Indexed-array targets can
+# evaluate arithmetic recursively, so the parser does not model any ``wait -p``.
 
 # ``trap -p`` and ``trap -l`` only inspect handler state. Every other trap form
 # can mutate later command execution and stays outside this bounded parser.
@@ -203,12 +184,55 @@ _GIT_BUILTIN_SUBCOMMANDS = frozenset(
     {"add", "commit", "diff", "fetch", "push", "send-pack", "status"}
 )
 
+# A recognized Git builtin is not sufficient on its own: some subcommand
+# options name another executable (for example, ``push --receive-pack``).
+# Only the option forms required by these public examples are modeled. Every
+# other option, including Git's accepted long-option abbreviations, fails
+# closed instead of inheriting the policy-controlled ``shell`` capability.
+_GIT_SUBCOMMAND_OPTIONS_WITH_VALUE = {
+    "commit": frozenset({"-m", "--message"}),
+    "push": frozenset({"-o", "--push-option"}),
+}
+_GIT_SUBCOMMAND_OPTIONS_WITHOUT_VALUE = {
+    "diff": frozenset({"--cached"}),
+    "push": frozenset({"--tags"}),
+    "status": frozenset({"--short"}),
+}
+_GIT_SUBCOMMAND_SHORT_OPTIONS_WITHOUT_VALUE = {
+    "push": frozenset("46dfnquv"),
+    "send-pack": frozenset("fnqv"),
+    "status": frozenset("s"),
+}
+_GIT_FORCE_LONG_OPTIONS = ("--force", "--force-with-lease", "--mirror")
+
 # These forms can synthesize argv after the helper has tokenized the command.
 # Keep the list deliberately small and reject rather than emulate their input
 # parsing or generated argument handling.
 _DYNAMIC_ARGV_EXECUTORS = frozenset({"xargs"})
 _FIND_DYNAMIC_EXECUTION_PREDICATES = frozenset(
     {"-exec", "-execdir", "-ok", "-okdir"}
+)
+
+# Only these direct simple-command heads may use the policy-controlled ``shell``
+# capability. They do not provide a shell-level callback, interpreter, or state
+# mutation surface in the modeled forms. Git and shell wrappers are handled by
+# dedicated branches below. Everything else is unknown by default rather than
+# silently expanding the auto-allow surface when Bash adds a builtin or a caller
+# introduces another command dispatcher.
+_MODELED_SIMPLE_COMMANDS = frozenset(
+    {
+        ":",
+        "[",
+        "cat",
+        "echo",
+        "false",
+        "ls",
+        "printf",
+        "pwd",
+        "tee",
+        "test",
+        "true",
+    }
 )
 
 # These command-position forms can dispatch another executable or introduce
@@ -1373,22 +1397,14 @@ def _is_heredoc_boundary(char: str) -> bool:
 
 def _classify_statement(tokens: list[str], depth: int) -> str:
     """Classify a single statement (already split on operators)."""
-    # Skip leading env assignments: ``FOO=bar git push --force``.
-    i = 0
-    while i < len(tokens):
-        if _is_shell_startup_selector_assignment(tokens[i]):
-            return "unknown"
-        if not _is_env_assignment(tokens[i]):
-            break
-        if _is_git_config_assignment(tokens[i]):
-            # Git reads GIT_CONFIG* assignments before it resolves push
-            # defaults and aliases. Their effects are outside this static argv
-            # model and may hide a force refspec from the visible command.
-            return "unknown"
-        i += 1
-    tokens = tokens[i:]
-    if not tokens:
-        return "shell"
+    # An assignment can alter a later command through application-specific
+    # environment hooks, shell tracing state, or another second-stage evaluator.
+    # There is no environment-name denylist: all leading assignments fail closed.
+    if _is_env_assignment(tokens[0]):
+        return "unknown"
+
+    if _is_path_qualified_command(tokens[0]):
+        return "unknown"
 
     # Unwrap the one common command prefix this example models. Unknown sudo
     # option forms fail closed because they can consume following arguments.
@@ -1405,6 +1421,8 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
             # sudo accepts VAR=value before its command. Re-tokenizing that
             # mini-language is outside this bounded model.
             return "unknown"
+        if _is_path_qualified_command(tokens[0]):
+            return "unknown"
 
     if _starts_with_redirection(tokens):
         return "unknown"
@@ -1418,33 +1436,21 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         # A parameter-expanded command name can resolve to an interpreter or
         # Git executable after classification.
         return "unknown"
-    if (
-        head_basename in _SHELL_ASSIGNMENT_BUILTINS
-        and _has_shell_startup_selector_declaration(tokens[1:])
-    ):
+    if head_basename in _SHELL_ASSIGNMENT_BUILTINS:
+        # Assignment builtins persist state beyond this statement. Their target
+        # names and values cannot be proven inert by this bounded parser.
         return "unknown"
-    if head_basename == "set" and _changes_allexport_state(tokens[1:]):
+    if head_basename == "set":
+        # Every option form mutates or exposes shell state; future statements
+        # can consume that state in ways this statement-local parser cannot see.
         return "unknown"
-    if head_basename == "wait" and _wait_has_unmodeled_variable_target(
-        tokens[1:]
-    ):
-        return "unknown"
+    if head_basename == "wait":
+        if _wait_has_unmodeled_variable_target(tokens[1:]):
+            return "unknown"
+        return "shell"
     if head_basename == "trap":
         return "shell" if _is_literal_trap_query(tokens[1:]) else "unknown"
     if head_basename in _SHELL_ARITHMETIC_BUILTINS:
-        return "unknown"
-    if (
-        head_basename in _SHELL_INTEGER_DECLARATION_BUILTINS
-        and (
-            _has_evaluating_declaration_option(tokens[1:])
-            or _has_parameter_expanded_option(tokens[1:], leading_only=True)
-        )
-    ):
-        return "unknown"
-    if (
-        head_basename in _SHELL_ASSIGNMENT_BUILTINS
-        and _has_arithmetic_variable_target(tokens[1:])
-    ):
         return "unknown"
     if head_basename in _SHELL_UNMODELED_VARIABLE_BUILTINS:
         return "unknown"
@@ -1488,9 +1494,8 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         if embedded:
             if "$" in embedded:
                 return "unknown"
-            nested = map_command(embedded, _depth=depth + 1)
-            if nested != "shell":
-                return nested
+            return map_command(embedded, _depth=depth + 1)
+        return "unknown"
 
     # Classify only the executable position. Treating arbitrary argument text
     # as a nested executor creates false positives such as ``echo xargs``.
@@ -1514,15 +1519,20 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         subcommand = tokens[subcommand_index]
         if subcommand not in _GIT_BUILTIN_SUBCOMMANDS:
             return "unknown"
+        subcommand_args = tokens[subcommand_index + 1 :]
+        if not _git_subcommand_options_are_modeled(subcommand, subcommand_args):
+            return "unknown"
         if subcommand in {"push", "send-pack"}:
-            push_args = tokens[subcommand_index + 1 :]
-            if _has_force_flag(push_args):
+            if _has_force_flag(subcommand_args):
                 return "push.force"
-            if any("$" in arg for arg in push_args):
+            if any("$" in arg for arg in subcommand_args):
                 return "unknown"
         return "shell"
     if basename in {"git-push", "git-send-pack"}:
         push_args = tokens[1:]
+        subcommand = "push" if basename == "git-push" else "send-pack"
+        if not _git_subcommand_options_are_modeled(subcommand, push_args):
+            return "unknown"
         if _has_force_flag(push_args):
             return "push.force"
         if any("$" in arg for arg in push_args):
@@ -1535,13 +1545,20 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     if basename == "gh":
         if tokens[1:3] == ["pr", "merge"]:
             return "merge.pr"
-        return "shell"
+        return "unknown"
     if _contains_later_sensitive_command_token(tokens):
         # Preserve the old scan-anywhere guard conservatively without treating
         # ordinary xargs/find argument text as an executor. A literal Git, gh,
         # or shell executable behind an unmodeled prefix must not auto-allow.
         return "unknown"
-    return "shell"
+    if basename in _MODELED_SIMPLE_COMMANDS:
+        return "shell"
+    return "unknown"
+
+
+def _is_path_qualified_command(command: str) -> bool:
+    """Whether a POSIX shell command head names a path, not a bare command."""
+    return "/" in command
 
 
 def _starts_with_redirection(tokens: list[str]) -> bool:
@@ -1593,6 +1610,8 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
             return "unknown"
         if _shell_short_option_cluster_reads_startup_files(arg):
             return "unknown"
+        if _shell_short_option_cluster_enables_xtrace(arg):
+            return "unknown"
         if _is_shell_short_option_cluster_with_c(arg):
             if j + 1 >= len(args):
                 return "unknown"
@@ -1604,7 +1623,7 @@ def _classify_wrapper_c(args: list[str], depth: int) -> str:
         if arg in _SHELL_OPTIONS_WITH_VALUE:
             if j + 1 >= len(args):
                 return "unknown"
-            if arg == "-o" and args[j + 1] == "allexport":
+            if arg == "-o" and args[j + 1] in {"allexport", "xtrace"}:
                 return "unknown"
             j += 2
             continue
@@ -1634,6 +1653,11 @@ def _shell_short_option_cluster_reads_startup_files(arg: str) -> bool:
     )
 
 
+def _shell_short_option_cluster_enables_xtrace(arg: str) -> bool:
+    """Whether a short-option cluster evaluates the inherited PS4 value."""
+    return _is_shell_short_option_cluster(arg) and "x" in arg[1:]
+
+
 def _is_shell_short_option_cluster(arg: str) -> bool:
     """True when ``arg`` contains only modeled no-argument shell flags."""
     return (
@@ -1655,19 +1679,14 @@ def _classify_env(args: list[str], depth: int) -> str:
 
 
 def _env_command_start(args: list[str]) -> int | None:
-    """Return the command offset after supported ``env`` options and vars."""
+    """Return the command offset after supported assignment-free options."""
     index = 0
     while index < len(args):
         arg = args[index]
         if arg == "--":
             return index + 1
-        if _is_shell_startup_selector_assignment(arg):
-            return None
         if _is_env_assignment(arg):
-            if _is_git_config_assignment(arg):
-                return None
-            index += 1
-            continue
+            return None
         if arg in {"-0", "-i", "--ignore-environment", "--null"}:
             index += 1
             continue
@@ -1725,23 +1744,7 @@ def _has_force_flag(push_args: list[str]) -> bool:
         if arg.startswith(("-o", "--push-option=")):
             index += 1
             continue
-        if arg in ("--force", "--mirror", "-f"):
-            return True
-        if arg.startswith("--force-with-lease"):
-            return True
-        if len(arg) > 2 and any(
-            option.startswith(arg)
-            for option in ("--force", "--force-with-lease", "--mirror")
-        ):
-            # Git accepts unique long-option abbreviations. Treat every
-            # force-related prefix conservatively rather than reproducing
-            # version-specific abbreviation resolution.
-            return True
-        if (
-            arg.startswith("-")
-            and not arg.startswith("--")
-            and "f" in arg[1:]
-        ):
+        if _is_modeled_force_option("push", arg):
             return True
         if len(arg) > 1 and arg.startswith("+"):
             return True
@@ -1749,41 +1752,87 @@ def _has_force_flag(push_args: list[str]) -> bool:
     return False
 
 
-def _is_shell_startup_selector_assignment(token: str) -> bool:
-    """Whether an assignment directly sets a modeled startup selector."""
-    name = _shell_assignment_name(token)
-    return name in (
-        _SHELL_STARTUP_FILE_SELECTORS | _SHELL_STARTUP_STATE_SELECTORS
+def _git_subcommand_options_are_modeled(
+    subcommand: str, args: list[str]
+) -> bool:
+    """Whether every visible option is in the bounded subcommand allowlist."""
+    with_value = _GIT_SUBCOMMAND_OPTIONS_WITH_VALUE.get(subcommand, frozenset())
+    without_value = _GIT_SUBCOMMAND_OPTIONS_WITHOUT_VALUE.get(
+        subcommand, frozenset()
     )
-
-
-def _has_evaluating_declaration_option(tokens: list[str]) -> bool:
-    """Whether a declaration enables array, integer, or nameref evaluation."""
-    for token in tokens:
-        if token == "--":
-            return False
-        if token.startswith(("-", "+")) and not token.startswith(("--", "++")):
-            if {"A", "a", "i", "n"}.intersection(token[1:]):
-                return True
-            continue
-        return False
-    return False
-
-
-def _has_arithmetic_variable_target(tokens: list[str]) -> bool:
-    """Whether a declaration names an indexed-array or dynamic target."""
-    options = True
-    for token in tokens:
-        if options and token == "--":
-            options = False
-            continue
-        if options and token.startswith(("-", "+")):
-            continue
-        options = False
-        target = token.split("=", 1)[0]
-        if any(marker in target for marker in ("[", "]", "$")):
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
             return True
-    return False
+        if arg in with_value:
+            if index + 1 >= len(args):
+                return False
+            index += 2
+            continue
+        if arg in without_value:
+            index += 1
+            continue
+        if any(
+            option.startswith("--") and arg.startswith(f"{option}=")
+            for option in with_value
+        ):
+            index += 1
+            continue
+        if any(
+            option.startswith("-")
+            and not option.startswith("--")
+            and arg.startswith(option)
+            and len(arg) > len(option)
+            for option in with_value
+        ):
+            index += 1
+            continue
+        if _is_modeled_force_option(subcommand, arg):
+            index += 1
+            continue
+        if (
+            arg.startswith("-")
+            and not arg.startswith("--")
+            and len(arg) > 1
+            and all(
+                flag
+                in _GIT_SUBCOMMAND_SHORT_OPTIONS_WITHOUT_VALUE.get(
+                    subcommand, frozenset()
+                )
+                for flag in arg[1:]
+            )
+        ):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            return False
+        index += 1
+    return True
+
+
+def _is_modeled_force_option(subcommand: str, arg: str) -> bool:
+    """Whether ``arg`` is a bounded force option for a push-like command."""
+    if subcommand not in {"push", "send-pack"}:
+        return False
+    if arg.startswith("--"):
+        name = arg.split("=", 1)[0]
+        return len(name) > 2 and any(
+            option == name or option.startswith(name)
+            for option in _GIT_FORCE_LONG_OPTIONS
+        )
+    return (
+        arg.startswith("-")
+        and len(arg) > 1
+        and "f" in arg[1:]
+        and all(
+            flag
+            in _GIT_SUBCOMMAND_SHORT_OPTIONS_WITHOUT_VALUE.get(
+                subcommand, frozenset()
+            )
+            for flag in arg[1:]
+        )
+    )
 
 
 def _wait_has_unmodeled_variable_target(tokens: list[str]) -> bool:
@@ -1839,54 +1888,6 @@ def _has_parameter_expanded_option(
     return False
 
 
-def _changes_allexport_state(tokens: list[str]) -> bool:
-    """Whether set changes allexport, which can export a staged selector."""
-    for index, token in enumerate(tokens):
-        if token in {"-o", "+o"}:
-            if index + 1 < len(tokens) and tokens[index + 1] == "allexport":
-                return True
-            continue
-        if (
-            len(token) > 1
-            and token.startswith(("-", "+"))
-            and not token.startswith(("--", "++"))
-            and "a" in token[1:]
-        ):
-            return True
-    return False
-
-
-def _has_shell_startup_selector_declaration(tokens: list[str]) -> bool:
-    """Whether an assignment builtin directly or dynamically names a selector."""
-    for token in tokens:
-        if _is_shell_startup_selector_declaration(token):
-            return True
-        if "$" in token.split("=", 1)[0]:
-            return True
-    return False
-
-
-def _is_shell_startup_selector_declaration(token: str) -> bool:
-    """Whether a declaration token names a modeled startup selector."""
-    return (
-        _shell_assignment_name(token) or token
-    ) in (_SHELL_STARTUP_FILE_SELECTORS | _SHELL_STARTUP_STATE_SELECTORS)
-
-
-def _shell_assignment_name(token: str) -> str | None:
-    """Return a shell assignment name, including the append-assignment form."""
-    if "=" not in token:
-        return None
-    name = token.split("=", 1)[0]
-    if name.endswith("+"):
-        name = name[:-1]
-    if not name or name[0].isdigit():
-        return None
-    if not all(char.isalnum() or char == "_" for char in name):
-        return None
-    return name
-
-
 def _is_env_assignment(token: str) -> bool:
     """True if ``token`` looks like a leading ``FOO=bar`` env assignment."""
     if "=" not in token:
@@ -1895,12 +1896,6 @@ def _is_env_assignment(token: str) -> bool:
     if not head or head[0].isdigit():
         return False
     return all(c.isalnum() or c == "_" for c in head)
-
-
-def _is_git_config_assignment(token: str) -> bool:
-    """Whether a leading assignment can mutate Git's effective config."""
-    name = token.split("=", 1)[0]
-    return name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_")
 
 
 def _stricter(a: str, b: str) -> str:
