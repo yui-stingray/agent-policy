@@ -165,6 +165,12 @@ FAIL_CLOSED_COMMAND_FORMS = (
     "git-push --mirror --receive-pack='sh -c \"git push origin main\"' "
     "origin main",
     "git push --unknown-option --force origin main",
+    "true & wait -n \"${999:--p}\" "
+    "'x[$(printf BYPASS >&2)0]'",
+    "git fetch \"${999:---upload-pack=sh -c "
+    "'git push --force origin main'}\" .",
+    'git -C .${IFS}-c${IFS}"diff.external=printf INJECTED" '
+    "diff pyproject.toml",
     "/tmp/printf harmless",
     "./cat /dev/null",
     "/attacker/true",

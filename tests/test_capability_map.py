@@ -451,6 +451,9 @@ def test_shell_startup_selector_assignments_return_unknown(command: str) -> None
         "wait -p job_id -n",
         "wait -pjob_id -n",
         "wait -nf -p job_id",
+        "true & wait -n \"${999:--p}\" "
+        "'x[$(printf BYPASS >&2)0]'",
+        "wait -n \"${missing:--pjob_id}\" reviewed-job",
     ],
 )
 def test_wait_p_assignments_return_unknown(command: str) -> None:
@@ -467,6 +470,36 @@ def test_wait_p_assignments_return_unknown(command: str) -> None:
 )
 def test_wait_without_assignment_remains_shell(command: str) -> None:
     assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    "subcommand",
+    sorted(capability_map._GIT_BUILTIN_SUBCOMMANDS),
+)
+def test_parameter_expanded_git_arguments_return_unknown(
+    subcommand: str,
+) -> None:
+    command = f'git {subcommand} "${{missing:---reviewed-option}}" reviewed'
+
+    assert map_command(command) == "unknown"
+
+
+def test_parameter_expanded_git_program_option_returns_unknown() -> None:
+    command = (
+        'git fetch "${999:---upload-pack=sh -c '
+        "'git push --force origin main'}\" ."
+    )
+
+    assert map_command(command) == "unknown"
+
+
+def test_parameter_expanded_git_global_option_returns_unknown() -> None:
+    command = (
+        'git -C .${IFS}-c${IFS}"diff.external=printf INJECTED" '
+        "diff pyproject.toml"
+    )
+
+    assert map_command(command) == "unknown"
 
 
 @pytest.mark.parametrize(

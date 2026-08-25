@@ -1510,7 +1510,9 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         # can consume that state in ways this statement-local parser cannot see.
         return "unknown"
     if head_basename == "wait":
-        if _wait_has_unmodeled_variable_target(tokens[1:]):
+        if _tokens_have_parameter_expansion(
+            tokens[1:]
+        ) or _wait_has_unmodeled_variable_target(tokens[1:]):
             return "unknown"
         return "shell"
     if head_basename == "trap":
@@ -1575,6 +1577,8 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
         ) or any("$" in arg for arg in tokens[1:]):
             return "unknown"
     if basename == "git":
+        if _tokens_have_parameter_expansion(tokens[1:]):
+            return "unknown"
         subcommand_index = _git_subcommand_index(tokens, 0)
         if (
             subcommand_index is None
@@ -1598,6 +1602,8 @@ def _classify_statement(tokens: list[str], depth: int) -> str:
     if basename in {"git-push", "git-send-pack"}:
         push_args = tokens[1:]
         subcommand = "push" if basename == "git-push" else "send-pack"
+        if _tokens_have_parameter_expansion(push_args):
+            return "unknown"
         if not _git_subcommand_options_are_modeled(subcommand, push_args):
             return "unknown"
         if _has_force_flag(push_args):
@@ -1910,6 +1916,17 @@ def _wait_has_unmodeled_variable_target(tokens: list[str]) -> bool:
         if "p" in token[1:]:
             return True
     return False
+
+
+def _tokens_have_parameter_expansion(tokens: list[str]) -> bool:
+    """Whether shell expansion can change an argument before option parsing.
+
+    ``shlex`` cannot retain enough quoting information to prove a dollar sign
+    inert.  For ``wait`` and recognized Git commands, an expanded positional
+    argument can become an option, so these bounded branches reject every such
+    token before interpreting options.
+    """
+    return any("$" in token for token in tokens)
 
 
 def _is_literal_trap_query(tokens: list[str]) -> bool:
