@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.16` alpha. The core evaluator API is stable for v0.1; additive
-wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.17.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.16`; the core evaluator API is stable for v0.1, while
+additive wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.16` for installation and provenance verification.
@@ -435,9 +436,13 @@ shell commands.
   configuration, hooks, helpers, or policy state for another call. ANSI-C
   quoted words (`$'...'`) are not modeled and fail closed because their
   escaped-quote rules differ from ordinary single quotes.
-  Parameter-expanded builtin options fail closed, and expanding-heredoc
-  delimiters are matched after backslash-newline folding so following commands
-  cannot be mistaken for heredoc data.
+  Parameter-expanded builtin options fail closed. `wait` operands and the
+  complete argv of a recognized Git command also fail closed when parameter
+  expansion remains unresolved, because an apparent positional argument or
+  global-option value can become an option before Git parses argv.
+  Expanding-heredoc delimiters
+  are matched after backslash-newline folding so following commands cannot be
+  mistaken for heredoc data.
   A standalone `-exec`, `-execdir`, `-ok`, or `-okdir` token in
   `find` argv is conservatively blocked even when it could be another
   primary's value; the example does not model full `find` expression arity.
