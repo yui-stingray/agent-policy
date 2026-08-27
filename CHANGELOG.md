@@ -7,15 +7,17 @@ package is still alpha.
 
 ## Unreleased
 
+## 0.1.17 - 2026-08-27
+
 - Made the public example hooks fail closed when unresolved parameter
   expansion can become a `wait` option or any argument of a recognized Git
   command, including global options before its subcommand. This prevents
   expansion-time options from reaching Bash
   variable-name evaluation or command-bearing Git program selectors after the
   bounded classifier has approved the visible argv.
-- Began the next development cycle as `0.1.17.dev0`, distinct from the latest
-  public PyPI release `0.1.16`, so unreleased artifacts cannot reuse its
-  immutable published identity.
+- Kept unreleased builds on `0.1.17.dev0`, distinct from public `0.1.16`, so
+  development artifacts could not reuse a published identity before this final
+  `0.1.17` release.
 
 ## 0.1.16 - 2026-08-25
 
