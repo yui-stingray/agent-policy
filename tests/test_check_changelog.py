@@ -33,13 +33,13 @@ def test_changelog_versions_extract_semver_headings(tmp_path: Path) -> None:
     assert MODULE.changelog_versions(changelog) == ["0.1.4", "0.1.3"]
 
 
-def test_current_project_release_version_uses_versioned_notes() -> None:
+def test_current_project_development_version_uses_unreleased_notes() -> None:
     root = Path(__file__).resolve().parents[1]
     version = MODULE.load_project_version(root / "pyproject.toml")
 
-    assert version == "0.1.17"
-    assert not MODULE.is_development_version(version)
-    assert MODULE.extract_release_notes(root / "CHANGELOG.md", version)
+    assert version == "0.1.18.dev0"
+    assert MODULE.is_development_version(version)
+    assert MODULE.extract_release_notes(root / "CHANGELOG.md", "Unreleased")
 
 
 def test_extract_release_notes_returns_selected_body(tmp_path: Path) -> None:

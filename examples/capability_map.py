@@ -20,19 +20,21 @@ Why: Earlier versions of the bash hooks used raw substring matching on
             literal data. Expanding bodies containing active command or
             arithmetic expansion are rejected instead of elided, and their
             delimiter lines are matched after backslash-newline folding.
-         2. Normalizing active Bash backslash-newline continuations for
-            output-redirection, brace, pathname-expansion, and comment
-            analysis, then returning ``unknown`` for active output
+         2. Normalizing active Bash backslash-newline continuations, then
+            returning ``unknown`` for active process substitution, output
             redirection, unquoted brace expansion, or pathname expansion
             before tokenization because ``shlex`` cannot preserve enough
             context to prove those forms inert.
-         3. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
+         3. Removing only active comment bodies with quote- and escape-aware
+            Bash lexical rules while retaining newlines as statement
+            boundaries and literal ``#`` characters in words and quotes.
+         4. Using :mod:`shlex` with ``punctuation_chars=True`` so shell
             operators like ``;``, ``&&``, ``||``, ``|``, ``&`` become
             their own tokens and quoted arguments collapse into single
             opaque tokens.
-         4. Splitting the token stream into statements on those
+         5. Splitting the token stream into statements on those
             operators and classifying each statement independently.
-         5. Within a statement, scanning for the narrow set of
+         6. Within a statement, scanning for the narrow set of
             patterns the hooks care about:
 
                 git push ... --force[-with-lease] / -f  → push.force
@@ -41,24 +43,24 @@ Why: Earlier versions of the bash hooks used raw substring matching on
                 bounded read-only simple commands       → shell
                 every other command or state form       → unknown
 
-         6. Returning ``unknown`` unless each simple-command head belongs to a
+         7. Returning ``unknown`` unless each simple-command head belongs to a
             finite allowlist or a separately modeled Git/shell-wrapper path.
             Path-qualified command heads are rejected because a familiar
             basename does not establish the executable's implementation.
             This prevents callback-bearing builtins and unfamiliar command
             dispatchers from inheriting a policy-controlled ``shell`` result.
 
-         7. Recursively classifying the embedded command when the
+         8. Recursively classifying the embedded command when the
             statement is ``bash -c '...'`` / ``sh -c '...'`` / ``eval
             '...'``, so dropping into a nested shell does not hide a
             ``push.force`` from the hook.
 
-         8. Returning ``unknown`` for malformed, ambiguous, incomplete, or
+         9. Returning ``unknown`` for malformed, ambiguous, incomplete, or
             unmodeled execution syntax, including trap mutation and
             ``wait -p`` assignment. Hooks must reject ``unknown`` rather
             than passing it to policy fallback.
 
-         9. Returning unknown for active command and arithmetic expansion.
+         10. Returning unknown for active command and arithmetic expansion.
             The bounded parser does not interpret those active forms;
             single-quoted and escaped forms remain literal data. Options for
             arithmetic-sensitive builtins also fail closed when parameter
@@ -78,12 +80,13 @@ rather than parsed. Only explicitly modeled simple commands return ``shell``;
 syntax the helper cannot parse confidently returns ``unknown`` so a wrapper can
 fail closed before policy evaluation.
 
-Active output redirection and unquoted brace and pathname expansion are
-rejected before ``shlex`` because they can mutate repository state or create
-arguments that are not visible in the raw token stream. The scanners use Bash
-logical lines after exact backslash-LF continuations are removed. Quoted or
-escaped syntax, comments, simple parameter expansion, ordinary shell grouping,
-and quoted-delimiter heredoc bodies do not trigger this fallback.
+Active process substitution, output redirection, and unquoted brace and pathname
+expansion are rejected before ``shlex`` because they can execute code, mutate
+repository state, or create arguments that are not visible in the raw token
+stream. The scanners use Bash logical lines after exact backslash-LF
+continuations are removed. Quoted or escaped syntax, comments, simple parameter
+expansion, ordinary shell grouping, and quoted-delimiter heredoc bodies do not
+trigger this fallback.
 Arithmetic-bearing and indirect parameter expansions fail closed. ANSI-C
 quoted words also fail closed because their escaped-quote rules differ from the
 ordinary single-quote state used by this bounded parser.
@@ -321,15 +324,18 @@ def map_command(command: str, _depth: int = 0) -> str:
     try:
         stripped = _strip_heredocs(command)
         active_source = _normalize_active_line_continuations(stripped)
-        if _contains_active_output_redirection(active_source):
+        if _contains_active_process_substitution(active_source):
             return "unknown"
-        if _contains_active_arithmetic_expansion(active_source):
+        lexical_source = _strip_active_comments(active_source)
+        if _contains_active_output_redirection(lexical_source):
             return "unknown"
-        if _contains_active_unquoted_brace_expansion(active_source):
+        if _contains_active_arithmetic_expansion(lexical_source):
             return "unknown"
-        if _contains_active_unquoted_pathname_expansion(active_source):
+        if _contains_active_unquoted_brace_expansion(lexical_source):
             return "unknown"
-        tokens = _tokenize(_separate_unquoted_newlines(active_source))
+        if _contains_active_unquoted_pathname_expansion(lexical_source):
+            return "unknown"
+        tokens = _tokenize(_separate_unquoted_newlines(lexical_source))
     except ValueError:
         # An unbalanced quote, unsupported/ambiguous heredoc header, or
         # unterminated heredoc makes the bounded parser uncertain. A hook
@@ -357,6 +363,10 @@ def _tokenize(command: str) -> list[str]:
     """Tokenize ``command`` preserving shell operators as distinct tokens."""
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    # ``shlex`` treats every ``#`` as a comment by default. Bash only treats
+    # unquoted, unescaped ``#`` at a lexical boundary that way; those bodies
+    # were already removed by ``_strip_active_comments``.
+    lexer.commenters = ""
     return list(lexer)
 
 
@@ -403,8 +413,9 @@ def _normalize_active_line_continuations(command: str) -> str:
     do not affect later logical lines.
 
     Heredoc bodies have already been stripped before this helper runs. The
-    normalized view is used by the expansion scanners and shlex tokenization
-    so all three share Bash's logical-line comment boundaries.
+    normalized view is used by the process/expansion scanners and lexical
+    comment filtering so every downstream parser shares Bash's logical-line
+    comment boundaries.
     """
     out: list[str] = []
     quote: str | None = None
@@ -465,6 +476,103 @@ def _normalize_active_line_continuations(command: str) -> str:
         previous_escaped = False
         index += 1
     return "".join(out)
+
+
+def _strip_active_comments(command: str) -> str:
+    """Remove only active Bash comment bodies while retaining newlines.
+
+    ``shlex`` cannot distinguish an active comment marker from a literal
+    word-internal, quoted, or escaped ``#``. This pass runs after active
+    backslash-LF normalization so its lexical boundaries match Bash's logical
+    lines. Keeping each terminating newline preserves the statement boundary
+    for ``_separate_unquoted_newlines``.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            out.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                out.append(char)
+                out.append(command[index + 1])
+                index += 2
+                continue
+            out.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            out.append(char)
+            out.append(command[index + 1])
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                break
+            out.append("\n")
+            index = newline + 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _contains_active_process_substitution(command: str) -> bool:
+    """Whether normalized source contains active ``<(...)`` or ``>(...)``.
+
+    Process substitutions execute their bodies. They are screened after
+    heredoc elision and active backslash-LF normalization so continuation-
+    formed forms cannot become an allowlisted command argument after lexical
+    screening. Quoted, escaped, and comment text stays literal.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            index += 1
+            continue
+        if char == "#" and _starts_comment(command, index):
+            newline = command.find("\n", index)
+            if newline < 0:
+                return False
+            index = newline + 1
+            continue
+        if _starts_process_substitution(command, index):
+            return True
+        index += 1
+    return False
 
 
 def _contains_active_arithmetic_expansion(command: str) -> bool:
@@ -550,8 +658,8 @@ def _contains_active_output_redirection(command: str) -> bool:
     redirection operator. Inspect the normalized source first so output
     redirection at any statement position cannot stage Git configuration,
     hooks, helpers, or policy state before a later auto-allowed command.
-    Heredoc bodies and active command/process substitutions were already
-    handled by :func:`_strip_heredocs`.
+    Heredoc bodies were already elided, and active process substitutions are
+    screened before this redirection-specific pass.
     """
     quote: str | None = None
     index = 0
