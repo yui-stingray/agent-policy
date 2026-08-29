@@ -193,7 +193,7 @@ def test_ci_and_release_builds_use_the_hashed_nonisolated_toolchain() -> None:
         ) < workflow_job.index("Verify distribution public contract")
 
 
-def test_candidate_wheel_passes_exact_toolkit_gate_before_artifact_handoff() -> None:
+def test_candidate_wheel_gate_cannot_replace_validated_release_artifact() -> None:
     ci_workflow = WORKFLOWS["ci"].read_text(encoding="utf-8")
     release_workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
     ci_job = ci_workflow[
@@ -226,9 +226,13 @@ def test_candidate_wheel_passes_exact_toolkit_gate_before_artifact_handoff() -> 
             "Checkout exact Toolkit compatibility contract"
         ) < workflow_job.index("Verify Toolkit candidate compatibility")
 
-    assert release_job.index("Verify Toolkit candidate compatibility") < release_job.index(
-        "actions/upload-artifact@"
-    )
+    contract_index = release_job.index("Verify distribution public contract")
+    upload_index = release_job.index("Upload validated distributions")
+    checkout_index = release_job.index("Checkout exact Toolkit compatibility contract")
+    gate_index = release_job.index("Verify Toolkit candidate compatibility")
+    assert contract_index < upload_index < checkout_index < gate_index
+    assert release_job.count("Upload validated distributions") == 1
+    assert release_job.count("actions/upload-artifact@") == 1
 
 
 def test_ci_exposes_one_stable_required_aggregate() -> None:
