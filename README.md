@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.17` alpha. The core evaluator API is stable for v0.1; additive
-wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.18.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.17`; the core evaluator API is stable for v0.1, while
+additive wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.17` for installation and provenance verification.
@@ -373,8 +374,9 @@ with `pip install -e .`; public users who need the released library should use
   visible dynamic argv execution, path-qualified or unlisted command heads,
   and Git subcommands outside the bounded builtin allowlist become `unknown`
   and are rejected before policy evaluation. See the file header for the exact bounded flow:
-  heredoc stripping, expansion screening, `shlex` tokenization, statement
-  classification, and recursive `bash -c` / `eval` handling.
+  heredoc stripping, Bash lexical comment filtering, expansion and process-
+  substitution screening, `shlex` tokenization, statement classification, and
+  recursive `bash -c` / `eval` handling.
 
 ### Codex CLI hooks — current contract notes
 
@@ -398,8 +400,9 @@ shell commands.
   no decision, Codex falls back to the normal approval flow. The
   `codex_permission_request_hook.sh` example uses that no-decision case for
   `require_approval`.
-- **Heuristic command parsing.** `capability_map.py` is `shlex`-based,
-  not a full shell. It handles quoted literals, heredocs, compound
+- **Heuristic command parsing.** `capability_map.py` applies Bash lexical
+  comment filtering before `shlex` tokenization; it is not a full shell. It
+  handles quoted literals, heredocs, compound
   statements, a finite simple-command allowlist, a bounded set of Git global
   options such as `--git-dir=/path`, and deliberate Git builtin and
   subcommand-option allowlists (`status`, `add`, `commit`, `diff`,
@@ -452,8 +455,10 @@ shell commands.
   Leading input redirection, active output redirection anywhere, known
   execution prefixes such as `exec`, `time`, and `nohup`, grouping, and shell
   compound keywords also map to `unknown`.
-  Forms such as `git -c alias.p=push p --force`, process substitution, or
-  function definitions are not modeled. Command heads outside the finite
+  Direct and exact backslash-LF continuation-formed active process
+  substitutions are not modeled and map to `unknown`; quoted, escaped, and
+  commented forms remain literal. Forms such as `git -c alias.p=push p
+  --force` or function definitions are not modeled. Command heads outside the finite
   allowlist, including general interpreters and build/test runners, map to
   `unknown`. Path-qualified heads such as `/tmp/printf` and `./cat` also map to
   `unknown`; matching a basename is not proof that the referenced executable is

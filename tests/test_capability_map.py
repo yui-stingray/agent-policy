@@ -164,6 +164,66 @@ def test_literal_or_non_command_substitution_remains_shell(command: str) -> None
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
+        # The ``#`` remains part of the remote word, so the later force flag
+        # must remain visible to the mapper.
+        ("git push origin#reviewed --force", "push.force"),
+        ('git push "origin#reviewed" --force', "push.force"),
+        (r"git push origin\#reviewed --force", "push.force"),
+        ("true x#y; git push --force origin main", "push.force"),
+        ("gh pr merge 42#reviewed", "merge.pr"),
+        ('gh pr merge "42#reviewed"', "merge.pr"),
+        (r"gh pr merge 42\#reviewed", "merge.pr"),
+        ("true x#y; gh pr merge 42 --admin", "merge.pr"),
+    ],
+)
+def test_bash_lexical_hash_forms_preserve_capability(
+    command: str,
+    expected: str,
+) -> None:
+    assert map_command(command) == expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <(printf safe)",
+        f"cat <{BASH_LINE_CONTINUATION}(printf safe)",
+        "cat >(printf safe)",
+        f"cat >{BASH_LINE_CONTINUATION}(printf safe)",
+        "printf %s <(printf safe)",
+        f"printf %s <{BASH_LINE_CONTINUATION}(printf safe)",
+        "printf %s >(printf safe)",
+        f"printf %s >{BASH_LINE_CONTINUATION}(printf safe)",
+        "ls <(printf safe)",
+        f"ls <{BASH_LINE_CONTINUATION}(printf safe)",
+        "ls >(printf safe)",
+        f"ls >{BASH_LINE_CONTINUATION}(printf safe)",
+    ],
+)
+def test_active_process_substitution_returns_unknown(command: str) -> None:
+    assert map_command(command) == "unknown"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat '<(printf safe)'",
+        r"cat \<\(printf\ safe\)",
+        'printf "%s" ">(printf safe)"',
+        r"printf %s \>\(printf\ safe\)",
+        "ls '<(printf safe)'",
+        r"ls \>\(printf\ safe\)",
+        "ls # <(printf safe)",
+        "cat <<'EOF'\n<(printf safe)\nEOF",
+    ],
+)
+def test_literal_or_comment_process_substitution_remains_shell(command: str) -> None:
+    assert map_command(command) == "shell"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
         (f"true {BASH_LINE_CONTINUATION}# $(echo harmless)", "shell"),
         (
             f"true {BASH_LINE_CONTINUATION}{BASH_LINE_CONTINUATION}"

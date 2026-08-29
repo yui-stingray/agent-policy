@@ -47,8 +47,11 @@ FORCE_PUSH_EXECUTION_FORMS = (
     "bash -c 'echo safe'\ngit push --force origin main",
     "F=--force; git push $F origin main",
     "REF=+HEAD:main; git push origin $REF",
+    "true x#y; git push --force origin main",
 )
+MERGE_PR_EXECUTION_FORMS = ("true x#y; gh pr merge 42 --admin",)
 FAIL_CLOSED_COMMAND_FORMS = (
+    "cat <\\\n(printf safe)",
     "git push --fo* origin main",
     "bash -O extglob -c 'git push --@(force|force) origin main'",
     r"printf '%s\n' --force | xargs -I{} git push {} origin main",
@@ -473,6 +476,18 @@ def test_force_push_execution_forms_never_auto_allow(command: str, tmp_path: Pat
 
     assert result.returncode == 0
     assert _decision(result) == DENY_PAYLOAD
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("command", MERGE_PR_EXECUTION_FORMS)
+def test_merge_execution_forms_never_auto_allow(command: str, tmp_path: Path) -> None:
+    result = _run_hook(
+        _codex_payload(command),
+        policy=_default_auto_allow_policy(tmp_path),
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
     assert result.stderr == ""
 
 

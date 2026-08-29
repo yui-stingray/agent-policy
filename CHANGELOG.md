@@ -7,6 +7,15 @@ package is still alpha.
 
 ## Unreleased
 
+- Made the public example mapper apply Bash lexical comment rules before
+  `shlex`, preserving word-internal, quoted, and escaped `#` characters while
+  removing active comment bodies. It also rejects active direct and exact
+  backslash-LF continuation-formed process substitutions after heredoc
+  handling, before an allowlisted command can reach `shell` policy.
+- Began the next development cycle as `0.1.18.dev0`, distinct from the latest
+  public PyPI release `0.1.17`, so unreleased artifacts cannot reuse its
+  immutable published identity.
+
 ## 0.1.17 - 2026-08-27
 
 - Made the public example hooks fail closed when unresolved parameter
