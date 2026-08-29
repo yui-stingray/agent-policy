@@ -4,12 +4,11 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: Unreleased source `0.1.18.dev0`. The latest public PyPI release is
-`yui-agent-policy==0.1.17`; the core evaluator API is stable for v0.1, while
-additive wrapper helpers may still grow while the package is alpha.
+**Status**: `0.1.18` alpha. The core evaluator API is stable for v0.1; additive
+wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
-`0.1.17` for installation and provenance verification.
+`0.1.18` for installation and provenance verification.
 
 ## Why
 
@@ -62,7 +61,7 @@ is not required setup.
 ## Install
 
 ```bash
-pip install yui-agent-policy==0.1.17
+pip install yui-agent-policy==0.1.18
 ```
 
 From a source checkout, install the package in editable mode so both the
@@ -337,7 +336,7 @@ record schema and CI gates.
 
 See [`examples/`](examples/). To run them from this source checkout, install it
 with `pip install -e .`; public users who need the released library should use
-`pip install yui-agent-policy==0.1.17`:
+`pip install yui-agent-policy==0.1.18`:
 
 - `policy.toml` — a minimal fail-closed policy with two repos.
 - `ai_resilience_policy.toml` — a safety-oriented vocabulary example for
@@ -511,7 +510,7 @@ provenance and integrity evidence for a specific artifact and workflow
 identity. They do not prove code correctness, dependency safety, maintainer
 approval, absence of secrets, or policy compliance.
 
-To verify the GitHub provenance for downloaded `0.1.17` artifacts, check the
+To verify the GitHub provenance for downloaded `0.1.18` artifacts, check the
 tag, repository, and signer workflow explicitly:
 
 ```bash
@@ -527,7 +526,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-version = "0.1.17"
+version = "0.1.18"
 target = Path(sys.argv[1])
 request_timeout_seconds = 20
 metadata_url = f"https://pypi.org/pypi/yui-agent-policy/{version}/json"
@@ -580,14 +579,14 @@ for filename in sorted(expected):
         with (target / filename).open("xb") as destination:
             shutil.copyfileobj(response, destination)
 PY
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.17-py3-none-any.whl" \
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.18-py3-none-any.whl" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.17
-gh attestation verify "$verify_dir/yui_agent_policy-0.1.17.tar.gz" \
+  --source-ref refs/tags/v0.1.18
+gh attestation verify "$verify_dir/yui_agent_policy-0.1.18.tar.gz" \
   --repo yui-stingray/agent-policy \
   --signer-workflow yui-stingray/agent-policy/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.17
+  --source-ref refs/tags/v0.1.18
 )
 ```
 
