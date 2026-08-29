@@ -33,7 +33,7 @@ RUNTIME_CONTRACT_DEPENDENCIES = {
     "typing-extensions",
     "typing-inspection",
 }
-TOOLKIT_COMPATIBILITY_COMMIT = "e78944091264fd927e7c0fe6fae7bc4eb3de2ec0"
+TOOLKIT_COMPATIBILITY_COMMIT = "8ea48dc9926c55ac70af7a623c3ebcd8b35178c9"
 
 PINNED_ACTIONS = {
     "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
