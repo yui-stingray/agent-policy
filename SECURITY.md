@@ -25,5 +25,10 @@ Helpful reports include:
 - whether the issue can cause an unintended `auto_allow`, missed `deny`, or
   approval bypass
 
+Operational response, release containment, and yanking follow
+[`docs/operations-governance.md`](docs/operations-governance.md). Do not include
+raw credentials, private event bodies, or personal local paths in a public
+report.
+
 Do not use this project to test repositories or systems that you do not own or
 do not have permission to review.

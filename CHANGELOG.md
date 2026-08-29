@@ -7,6 +7,12 @@ package is still alpha.
 
 ## Unreleased
 
+- Began the next development cycle as `0.1.19.dev0`, distinct from the latest
+  public PyPI release `0.1.18`, so unreleased documentation and release-control
+  artifacts cannot reuse its immutable published identity.
+- Defined the trusted integration contract for one-time operation-bound
+  approval and the audited break-glass and release-containment boundaries.
+
 ## 0.1.18 - 2026-08-29
 
 - Made the public example mapper apply Bash lexical comment rules before
