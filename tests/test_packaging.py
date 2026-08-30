@@ -25,9 +25,13 @@ from scripts import check_wheel_contract
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 README = REPO_ROOT / "README.md"
+SECURITY = REPO_ROOT / "SECURITY.md"
+INTEGRATION_CONTRACT = REPO_ROOT / "docs" / "integration-contract.md"
+OPERATIONS_GOVERNANCE = REPO_ROOT / "docs" / "operations-governance.md"
 PACKAGE_DIR = REPO_ROOT / "src" / "agent_policy"
 SCHEMA_DIR = PACKAGE_DIR / "schemas"
-CURRENT_RELEASE_VERSION = "0.1.18"
+CURRENT_SOURCE_VERSION = "0.1.19.dev0"
+LATEST_PUBLIC_VERSION = "0.1.18"
 
 
 def _pyproject_version() -> str:
@@ -43,22 +47,25 @@ def test_package_version_matches_pyproject() -> None:
     assert agent_policy.__version__ == _pyproject_version()
 
 
-def test_release_identity_matches_readme_install_contract() -> None:
+def test_unreleased_source_identity_matches_readme_install_contract() -> None:
     readme = README.read_text(encoding="utf-8")
 
-    assert _pyproject_version() == CURRENT_RELEASE_VERSION
-    assert agent_policy.__version__ == CURRENT_RELEASE_VERSION
-    assert f"**Status**: `{CURRENT_RELEASE_VERSION}` alpha." in readme
-    assert "current unreleased source checkout" not in readme
-    assert readme.count(f"pip install yui-agent-policy=={CURRENT_RELEASE_VERSION}") == 2
+    assert _pyproject_version() == CURRENT_SOURCE_VERSION
+    assert agent_policy.__version__ == CURRENT_SOURCE_VERSION
+    assert (
+        f"**Status**: Unreleased source `{CURRENT_SOURCE_VERSION}`. "
+        "The latest public PyPI release is"
+    ) in readme
+    assert f"`yui-agent-policy=={LATEST_PUBLIC_VERSION}`" in readme
+    assert readme.count(f"pip install yui-agent-policy=={LATEST_PUBLIC_VERSION}") == 2
     assert "\npip install yui-agent-policy\n" not in readme
 
 
 def test_readme_provenance_download_uses_expected_local_filenames() -> None:
     readme = README.read_text(encoding="utf-8")
-    version = CURRENT_RELEASE_VERSION
+    version = LATEST_PUBLIC_VERSION
 
-    assert version == _pyproject_version()
+    assert version != _pyproject_version()
     assert f'version = "{version}"' in readme
     assert readme.count(f"--source-ref refs/tags/v{version}") == 2
     assert "(\nset -euo pipefail\nverify_dir=\"$(mktemp -d" in readme
@@ -137,6 +144,42 @@ def test_readme_documents_wrapper_contract_summary() -> None:
     assert "Schema validation does not redact values" in readme
     assert "prove repository containment" in readme
     assert "audit-event schema validation" in readme
+
+
+def test_persisted_approval_contract_is_versioned_and_fail_closed() -> None:
+    readme = README.read_text(encoding="utf-8")
+    contract = INTEGRATION_CONTRACT.read_text(encoding="utf-8")
+    normalized = " ".join(contract.split())
+
+    assert "docs/integration-contract.md" in readme
+    assert "not approval tokens" in readme
+    for required_phrase in (
+        "canonical repository identity",
+        "normalized operation",
+        "payload digest",
+        "policy revision",
+        "context revision",
+        "one-time request identity",
+    ):
+        assert required_phrase in normalized
+    assert "Any mutation requires reevaluation" in normalized
+    assert "replay must fail closed" in normalized
+    assert "They are not approval tokens" in normalized
+    assert "new versioned envelope/API/schema" in normalized
+    assert "false or missing ownership/first-write state" in normalized
+
+
+def test_operations_governance_keeps_release_recovery_auditable() -> None:
+    security = SECURITY.read_text(encoding="utf-8")
+    operations = OPERATIONS_GOVERNANCE.read_text(encoding="utf-8")
+
+    assert "docs/operations-governance.md" in security
+    assert "agent-policy required CI" in operations
+    assert "candidate wheel" in operations
+    assert "direct push, force push, tag move" in operations
+    assert "yanked with" in operations
+    assert "new patch version" in operations
+    assert "raw tokens, URLs, event bodies" in operations
 
 
 def test_readme_codex_hook_docs_match_current_contract() -> None:

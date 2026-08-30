@@ -33,6 +33,7 @@ RUNTIME_CONTRACT_DEPENDENCIES = {
     "typing-extensions",
     "typing-inspection",
 }
+TOOLKIT_COMPATIBILITY_COMMIT = "8ea48dc9926c55ac70af7a623c3ebcd8b35178c9"
 
 PINNED_ACTIONS = {
     "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -112,7 +113,7 @@ def test_checkout_steps_do_not_persist_credentials() -> None:
         checkout_count += workflow.count(checkout)
         persistence_count += workflow.count("persist-credentials: false")
 
-    assert checkout_count == 6
+    assert checkout_count == 8
     assert persistence_count == checkout_count
 
 
@@ -190,6 +191,48 @@ def test_ci_and_release_builds_use_the_hashed_nonisolated_toolchain() -> None:
         assert workflow_job.index(build_step) < workflow_job.index(
             "Verify metadata (twine check)"
         ) < workflow_job.index("Verify distribution public contract")
+
+
+def test_candidate_wheel_gate_cannot_replace_validated_release_artifact() -> None:
+    ci_workflow = WORKFLOWS["ci"].read_text(encoding="utf-8")
+    release_workflow = WORKFLOWS["release"].read_text(encoding="utf-8")
+    ci_job = ci_workflow[
+        ci_workflow.index("\n  release-contract:\n") : ci_workflow.index(
+            "\n  test:\n", ci_workflow.index("\n  release-contract:\n")
+        )
+    ]
+    release_job = release_workflow[
+        release_workflow.index("\n  build:\n") : release_workflow.index(
+            "\n  attest:\n", release_workflow.index("\n  build:\n")
+        )
+    ]
+    checkout_contract = (
+        "repository: yui-stingray/agent-safety-toolkit-example\n"
+        f"          ref: {TOOLKIT_COMPATIBILITY_COMMIT}\n"
+        "          path: .candidate-toolkit\n"
+        "          persist-credentials: false"
+    )
+    gate_command = (
+        "python .candidate-toolkit/scripts/check_candidate_wheel_compatibility.py\n"
+        "          --wheel dist/yui_agent_policy-*.whl"
+    )
+
+    for workflow_job in (ci_job, release_job):
+        assert workflow_job.count("Checkout exact Toolkit compatibility contract") == 1
+        assert workflow_job.count(checkout_contract) == 1
+        assert workflow_job.count("Verify Toolkit candidate compatibility") == 1
+        assert workflow_job.count(gate_command) == 1
+        assert workflow_job.index("Verify distribution public contract") < workflow_job.index(
+            "Checkout exact Toolkit compatibility contract"
+        ) < workflow_job.index("Verify Toolkit candidate compatibility")
+
+    contract_index = release_job.index("Verify distribution public contract")
+    upload_index = release_job.index("Upload validated distributions")
+    checkout_index = release_job.index("Checkout exact Toolkit compatibility contract")
+    gate_index = release_job.index("Verify Toolkit candidate compatibility")
+    assert contract_index < upload_index < checkout_index < gate_index
+    assert release_job.count("Upload validated distributions") == 1
+    assert release_job.count("actions/upload-artifact@") == 1
 
 
 def test_ci_exposes_one_stable_required_aggregate() -> None:

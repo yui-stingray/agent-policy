@@ -4,8 +4,9 @@
 > Maps `(repo, capability, context)` to one of three modes:
 > `deny` / `require_approval` / `auto_allow`.
 
-**Status**: `0.1.18` alpha. The core evaluator API is stable for v0.1; additive
-wrapper helpers may still grow while the package is alpha.
+**Status**: Unreleased source `0.1.19.dev0`. The latest public PyPI release is
+`yui-agent-policy==0.1.18`; the core evaluator API is stable for v0.1, while
+additive wrapper helpers may still grow while the package is alpha.
 
 Note: `v0.1.10` is retained as a tag-only, unpublished release attempt; use
 `0.1.18` for installation and provenance verification.
@@ -268,6 +269,11 @@ same capability is rejected.
 
 ## Wrapper pattern
 
+Production integrations that persist or reuse approvals must follow the
+versioned operation-binding and replay-prevention requirements in
+[`docs/integration-contract.md`](docs/integration-contract.md). The current
+audit-event schemas are evidence primitives, not approval tokens.
+
 `agent-policy` deliberately does not know how to parse `git push --force`
 or a shell command line. The intended shape is:
 
@@ -293,11 +299,14 @@ For `require_approval` decisions, keep the approval layer outside
 `agent-policy` but make the wrapper contract explicit. Production wrappers
 should:
 
-- Bind approval records to the exact capability, session, path, and command
-  being executed. A command change after approval should fail closed.
+- Bind approval records to a trusted canonical repository identity, the exact
+  normalized operation and payload digest, immutable policy/context revisions,
+  and an integration-generated one-time request identity. Any change before
+  execution requires reevaluation.
 - Record the serialized audit event or a downstream hash of it in the approval
   record, then verify that the referenced event still exists before running
-  the approved command.
+  the approved command. The event remains supporting evidence; it is not the
+  approval token or operation binding.
 - Treat approvals as single-use for side-effecting operations such as
   `artifact.publish`; reserve a local use marker before executing the command
   so retry races cannot reuse the same approval.
