@@ -16,13 +16,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
-from .decision import PolicyDecision
+from .decision import Mode, PolicyDecision
 
 # Evaluation reads this private, immutable mapping rather than the public
 # compatibility view below. Keeping the evaluator's authority separate from
 # the exported name means callers can inspect the documented guardrails but
 # cannot weaken force-push denial through a mutable public object.
-_EVALUATION_HARD_GUARDRAILS: Final[Mapping[str, str]] = MappingProxyType(
+_EVALUATION_HARD_GUARDRAILS: Final[Mapping[str, Mode]] = MappingProxyType(
     {"push.force": "deny"}
 )
 
@@ -52,9 +52,10 @@ def _evaluate_hard_guardrails(
     Conditional guardrails always yield `require_approval`, never `deny`,
     because context can be wrong or stale and a hard block is unrecoverable.
     """
-    if capability in _EVALUATION_HARD_GUARDRAILS:
+    mode = _EVALUATION_HARD_GUARDRAILS.get(capability)
+    if mode is not None:
         return PolicyDecision(
-            mode="deny",  # only "deny" lives in HARD_GUARDRAILS today
+            mode=mode,
             reason="hard_guardrail",
             matched_repo=repo,
         )

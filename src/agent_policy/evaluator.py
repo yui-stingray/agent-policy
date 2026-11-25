@@ -47,28 +47,23 @@ def evaluate(
     # Scan every entry for the same repo. A policy split across multiple
     # [[repo_policy]] blocks must not lose later constraints just because
     # an earlier block matched the repo but omitted the capability.
-    matched_repo_fallback: str | None = None
+    matched_repo: str | None = None
     for repo_policy in matrix.repo_policy:
-        if repo_policy.repo != repo:
-            continue
-        if not _ownership_matches(repo_policy, ctx):
+        if repo_policy.repo != repo or not _ownership_matches(repo_policy, ctx):
             continue
 
+        matched_repo = repo_policy.repo
         if capability in repo_policy.capabilities:
             return PolicyDecision(
                 mode=repo_policy.capabilities[capability],
                 reason="repo_policy",
                 matched_repo=repo_policy.repo,
             )
-        # Remember the first matching repo so the fallback decision still
-        # reports which repo was considered, even if no capability matched.
-        if matched_repo_fallback is None:
-            matched_repo_fallback = repo_policy.repo
 
     return PolicyDecision(
         mode=matrix.default_mode,
         reason="default_mode",
-        matched_repo=matched_repo_fallback,
+        matched_repo=matched_repo,
     )
 
 
