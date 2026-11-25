@@ -13,6 +13,7 @@ Design notes:
 
 from __future__ import annotations
 
+from itertools import combinations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -40,29 +41,26 @@ class RepoPolicy(BaseModel):
 
 def _validate_repo_policy_consistency(repo_policy: list[RepoPolicy]) -> None:
     """Reject order-dependent decisions from overlapping repo rules."""
-    for left_index, left in enumerate(repo_policy):
-        for right_index, right in enumerate(
-            repo_policy[left_index + 1 :], start=left_index + 1
+    for (left_index, left), (right_index, right) in combinations(enumerate(repo_policy), 2):
+        if left.repo != right.repo:
+            continue
+        if (
+            left.ownership_class is not None
+            and right.ownership_class is not None
+            and left.ownership_class != right.ownership_class
         ):
-            if left.repo != right.repo:
-                continue
-            if (
-                left.ownership_class is not None
-                and right.ownership_class is not None
-                and left.ownership_class != right.ownership_class
-            ):
-                continue
+            continue
 
-            for capability in sorted(
-                left.capabilities.keys() & right.capabilities.keys()
-            ):
-                if left.capabilities[capability] == right.capabilities[capability]:
-                    continue
-                raise ValueError(
-                    "repo_policy entries "
-                    f"{left_index} and {right_index} overlap with conflicting "
-                    f"modes for repo {left.repo!r} and capability {capability!r}"
-                )
+        for capability in sorted(
+            left.capabilities.keys() & right.capabilities.keys()
+        ):
+            if left.capabilities[capability] == right.capabilities[capability]:
+                continue
+            raise ValueError(
+                "repo_policy entries "
+                f"{left_index} and {right_index} overlap with conflicting "
+                f"modes for repo {left.repo!r} and capability {capability!r}"
+            )
 
 
 class PolicyMatrix(BaseModel):
